@@ -19,7 +19,7 @@ def test_wizard_then_menu(tmp_path, mail_dir, monkeypatch):
     ask = scripted([
         "Coastal Edge",          # company
         "3",                     # keyword matching (no AI)
-        "4", str(mail_dir),      # folder of saved emails
+        "5", str(mail_dir),      # folder of saved emails
         "n",                     # no more accounts
         "1",                     # check email
         "4", "5",                # totals by job/project

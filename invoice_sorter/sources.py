@@ -26,7 +26,14 @@ KnownCheck = Callable[[str], bool]
 
 
 def iter_account(account: AccountConfig, is_known: KnownCheck) -> Iterator[bytes]:
-    if account.type == "outlook_app":
+    if account.type == "microsoft365":
+        from .microsoft import MicrosoftAccount, iter_mailbox
+
+        if not (account.client_id and account.path):
+            raise ValueError(f"Account '{account.name}': Microsoft 365 needs client_id and a sign-in file (path)")
+        yield from iter_mailbox(MicrosoftAccount(account.client_id, account.tenant or "", Path(account.path)),
+                                account.since, is_known)
+    elif account.type == "outlook_app":
         yield from _iter_outlook_app(account, is_known)
     elif account.type == "imap":
         yield from _iter_imap(account, is_known)

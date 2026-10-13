@@ -69,7 +69,8 @@ Your email is only read; nothing is moved, deleted, sent, or marked as read.
 
 | Your email | Pick |
 |---|---|
-| Microsoft 365 / work Outlook, with the Outlook app installed | **The Outlook app on this computer** (no password needed) |
+| Microsoft 365 / work Outlook (new or classic) | **Sign in with Microsoft**: a one-time app registration at entra.microsoft.com (the program shows each click), then a sign-in code |
+| Classic Outlook app installed | **The classic Outlook app on this computer** (no setup) |
 | Gmail / Google Workspace | **Gmail**, then follow the on-screen steps to create an "app password" |
 | Yahoo, iCloud, others | **Another email provider** |
 | Anything else, or the *new* Outlook app | Drag the emails into a folder, then pick **A folder of emails I saved** (.msg and .eml both work) |

@@ -180,14 +180,19 @@ def _ai_mode(cfg: Config) -> str:
 def add_account(cfg: Config, ask: Ask, out) -> Optional[AccountConfig]:
     out("\nWhere is the email?")
     choice = _choose(ask, out, [
-        "The Outlook app on this computer (best for Microsoft 365 / work Outlook)",
+        "Microsoft 365 / work Outlook - sign in with Microsoft (works with the New Outlook)",
+        "The classic Outlook app on this computer",
         "Gmail or Google Workspace",
         "Another email provider (Yahoo, iCloud, etc.)",
         "A folder of emails I saved (.msg or .eml files)",
         "Never mind",
     ])
-    if choice == 4:
+    if choice == 5:
         return None
+
+    if choice == 0:
+        return add_microsoft365(cfg, ask, out)
+    choice -= 1  # the remaining options keep their original numbering below
 
     if choice == 0:
         out("\nConnecting to Outlook. This can take up to a minute.")
@@ -243,7 +248,84 @@ def add_account(cfg: Config, ask: Ask, out) -> Optional[AccountConfig]:
     return acct
 
 
+GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+REGISTRATION_STEPS = [
+    "One-time setup (about 5 minutes). Microsoft needs to know about this program before it can sign in:",
+    "",
+    "  1. Open https://entra.microsoft.com and sign in with your work email.",
+    "  2. In the search box at the top, type  App registrations  and open it.",
+    "  3. Click  + New registration.",
+    "       Name:  Paid Purchases",
+    "       Who can use it:  'Accounts in this organizational directory only'",
+    "       Redirect URI:  leave empty",
+    "     Click  Register.",
+    "  4. On the page that opens, find  Application (client) ID  and  Directory (tenant) ID.",
+    "     You'll paste both here in a moment (there's a copy button next to each).",
+    "  5. In the left menu click  Authentication, find  'Allow public client flows',",
+    "     switch it to  Yes  (or Enabled), and click  Save.",
+    "",
+]
+
+
+def _ask_guid(ask: Ask, out, label: str) -> Optional[str]:
+    while True:
+        value = ask(f"Paste the {label} (right-click to paste), or press Enter to cancel: ").strip().strip('"')
+        if not value:
+            return None
+        if GUID.match(value):
+            return value
+        out("  That doesn't look right - it should look like 1a2b3c4d-1234-5678-9abc-1234567890ab.")
+
+
+def sign_in_microsoft(acct_cfg: AccountConfig, out) -> bool:
+    from .microsoft import MicrosoftAccount, SignInError
+
+    out("\nNow sign in. Your browser should open; if it doesn't, go to the address below yourself.")
+    try:
+        acct = MicrosoftAccount(acct_cfg.client_id, acct_cfg.tenant or "", Path(acct_cfg.path))
+        acct.sign_in(out)
+        acct_cfg.username = acct.email_address()
+    except SignInError as e:
+        out(f"\nSign-in didn't work: {e}")
+        return False
+    except OSError as e:
+        out(f"\nCouldn't reach Microsoft: {e}. Check the internet connection and try again.")
+        return False
+    out(f"\nSigned in as {acct_cfg.username}. You won't need to do this again on this computer.")
+    return True
+
+
+def add_microsoft365(cfg: Config, ask: Ask, out) -> Optional[AccountConfig]:
+    out("")
+    for line in REGISTRATION_STEPS:
+        out(line)
+    try:
+        import webbrowser
+
+        if _yes(ask, "Open entra.microsoft.com in your browser now?"):
+            webbrowser.open("https://entra.microsoft.com")
+    except Exception:
+        pass
+    client_id = _ask_guid(ask, out, "Application (client) ID")
+    if not client_id:
+        return None
+    tenant = _ask_guid(ask, out, "Directory (tenant) ID")
+    if not tenant:
+        return None
+    name = _unique_name(cfg, "microsoft365")
+    acct = AccountConfig(name=name, type="microsoft365", client_id=client_id, tenant=tenant,
+                         path=str(cfg.base_dir / f"{name}-signin.json"), since=_ask_date(ask, out))
+    if not sign_in_microsoft(acct, out):
+        out("You can try again under Settings -> Add an email account.")
+        return None
+    cfg.accounts.append(acct)
+    out(f"Added: {describe(acct)}")
+    return acct
+
+
 def describe(a: AccountConfig) -> str:
+    if a.type == "microsoft365":
+        return f"Microsoft 365 - {a.username or 'work email'} (from {a.since})"
     if a.type == "outlook_app":
         return f"Outlook app - {a.mailbox or 'all mailboxes'} (from {a.since})"
     if a.type == "imap":
@@ -305,7 +387,18 @@ def action_check(cfg: Config, db: Database, ask: Ask, out) -> None:
         out("No email accounts yet - add one under Settings.")
         return
     out("\nChecking your email. This can take a while the first time...\n")
-    result = scan(cfg, db, _analyzer(cfg, db, out, ask), log=out)
+    from .microsoft import SignInError
+
+    try:
+        result = scan(cfg, db, _analyzer(cfg, db, out, ask), log=out)
+    except SignInError as e:
+        out(f"\n{e}")
+        for acct in cfg.accounts:
+            if acct.type == "microsoft365" and _yes(ask, f"Sign in to {describe(acct)} again now?"):
+                if sign_in_microsoft(acct, out):
+                    save_config(cfg, settings_path())
+                    out("Signed in. Choose 1 again to check your email.")
+        return
     paid = result.get("confirmed", 0) + result.get("verified", 0) + result.get("user_confirmed", 0)
     out("\n" + "-" * 50)
     out(f"  Paid purchases found:        {paid}")
@@ -424,6 +517,7 @@ def self_test() -> int:
 
     from .analyzers import ClaudeAnalyzer, OfflineAnalyzer
     from .local_ai import EXTRACTION_SCHEMA, Ollama  # the free-AI support is bundled
+    from .microsoft import MicrosoftAccount  # noqa: F401  (Microsoft 365 sign-in is bundled)
     from .sources import build_mime
 
     assert "$ref" not in str(EXTRACTION_SCHEMA) and not Ollama("http://127.0.0.1:9").running()

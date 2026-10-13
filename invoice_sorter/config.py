@@ -35,7 +35,7 @@ DEFAULT_SEARCH_KEYWORDS = [
 @dataclass
 class AccountConfig:
     name: str
-    type: str  # outlook_app | imap | mbox | eml_folder
+    type: str  # microsoft365 | outlook_app | imap | mbox | eml_folder
     host: Optional[str] = None
     port: int = 993
     username: Optional[str] = None
@@ -45,6 +45,8 @@ class AccountConfig:
     since: Optional[str] = None  # YYYY-MM-DD
     path: Optional[str] = None
     mailbox: Optional[str] = None  # outlook_app: which mailbox (blank = all)
+    client_id: Optional[str] = None  # microsoft365: the app registration's Application (client) ID
+    tenant: Optional[str] = None     # microsoft365: the Directory (tenant) ID
     search_keywords: list[str] = field(default_factory=lambda: list(DEFAULT_SEARCH_KEYWORDS))
 
     def password(self) -> str:
@@ -115,7 +117,7 @@ def save_config(cfg: Config, path: str | Path) -> None:
     for a in cfg.accounts:
         entry = {"name": a.name, "type": a.type}
         for key in ("host", "port", "username", "password_env", "password_value", "folders", "since",
-                    "path", "mailbox", "search_keywords"):
+                    "path", "mailbox", "client_id", "tenant", "search_keywords"):
             value = getattr(a, key)
             if value not in (None, "") and value != getattr(defaults, key):
                 entry[key] = value

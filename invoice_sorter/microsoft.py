@@ -180,7 +180,7 @@ def iter_mailbox(acct: MicrosoftAccount, since: Optional[str], is_known: Callabl
             # The preview is short, so keep anything with even one money word; the full check comes later.
             if prefilter.score(m.get("subject") or "", m.get("bodyPreview") or "", hint) < 1:
                 continue
-            yield acct.get(f"/me/messages/{urllib.parse.quote(m['id'])}/$value", raw=True)
+            yield acct.get(f"/me/messages/{urllib.parse.quote(m['id'], safe='')}/$value", raw=True)
         url = page.get("@odata.nextLink")
         if seen and seen % 1000 == 0:
             log(f"  looked through {seen} emails so far...")
