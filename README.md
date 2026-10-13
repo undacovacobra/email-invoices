@@ -46,8 +46,9 @@ your mailboxes ──► keyword filter ──► Claude reads each email (+ PDF
    (That message shows for any program that isn't from a big software company.)
 3. **Answer the three setup questions.** It only asks once:
    - your company name, so invoices you *send* to clients aren't counted as purchases
-   - a Claude key: [console.anthropic.com](https://console.anthropic.com) → **API Keys** → **Create Key**, then right-click to paste
-     (add a little credit under Billing first; it's about a cent per email)
+   - which AI reads your emails. Pick **Free AI on this computer**: it installs the free Ollama program and a
+     ~5 GB model by itself, then runs entirely on your PC at no cost. (Claude is also offered: more accurate,
+     about a cent per email, needs a paid key.)
    - where your email is. Pick **"The Outlook app on this computer"** for Microsoft 365 / work Outlook,
      so no password is needed.
 4. Then just type a number from the menu:

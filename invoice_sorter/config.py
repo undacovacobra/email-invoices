@@ -65,6 +65,9 @@ class Config:
     confidence_threshold: float = 0.8
     company: Optional[str] = None
     anthropic_api_key: Optional[str] = None
+    ai: Optional[str] = None  # "local" (free, on this computer), "claude", or "keywords"
+    local_model: str = "qwen2.5:7b"
+    ollama_url: str = "http://localhost:11434"
     categories: list[str] = field(default_factory=lambda: list(DEFAULT_CATEGORIES))
     accounts: list[AccountConfig] = field(default_factory=list)
     base_dir: Path = Path(".")
@@ -96,6 +99,9 @@ def load_config(path: str | Path) -> Config:
         confidence_threshold=float(data.get("confidence_threshold", 0.8)),
         company=data.get("company"),
         anthropic_api_key=data.get("anthropic_api_key"),
+        ai=data.get("ai"),
+        local_model=data.get("local_model", "qwen2.5:7b"),
+        ollama_url=data.get("ollama_url", "http://localhost:11434"),
         categories=list(data.get("categories") or DEFAULT_CATEGORIES),
         accounts=accounts,
         base_dir=path.parent,
@@ -117,6 +123,9 @@ def save_config(cfg: Config, path: str | Path) -> None:
     data = {
         "company": cfg.company,
         "anthropic_api_key": cfg.anthropic_api_key,
+        "ai": cfg.ai,
+        "local_model": cfg.local_model,
+        "ollama_url": cfg.ollama_url,
         "database": cfg.database,
         "model": cfg.model,
         "confidence_threshold": cfg.confidence_threshold,

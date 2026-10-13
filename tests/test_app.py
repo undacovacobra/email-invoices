@@ -18,7 +18,7 @@ def test_wizard_then_menu(tmp_path, mail_dir, monkeypatch):
     out = []
     ask = scripted([
         "Coastal Edge",          # company
-        "skip",                  # no Claude key -> keyword mode
+        "3",                     # keyword matching (no AI)
         "4", str(mail_dir),      # folder of saved emails
         "n",                     # no more accounts
         "1",                     # check email

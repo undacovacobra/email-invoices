@@ -104,6 +104,77 @@ def check_api_key(key: str) -> Optional[str]:
         return f"Couldn't check the key ({name})."
 
 
+# ----------------------------------------------------------------------------- AI choice
+
+def setup_local_ai(cfg: Config, ask: Ask, out) -> bool:
+    """Make sure the free AI (Ollama + model) is installed and ready. Returns True when ready."""
+    from .local_ai import Ollama, install_ollama
+
+    client = Ollama(cfg.ollama_url)
+    if not client.running():
+        out("The free AI needs a small free program called Ollama (from ollama.com).")
+        if not _yes(ask, "Install it now?"):
+            return False
+        if not install_ollama(out):
+            return False
+    try:
+        if not client.has_model(cfg.local_model):
+            out(f"Downloading the AI model ({cfg.local_model}, about 5 GB, only once). This can take a while...")
+            last = [-1]
+
+            def progress(status: str, frac: float) -> None:
+                pct = int(frac * 100) if frac >= 0 else -1
+                if pct >= 0 and pct // 5 != last[0]:
+                    last[0] = pct // 5
+                    out(f"  {pct}%")
+
+            client.pull(cfg.local_model, progress)
+            out("  Model ready.")
+    except Exception as e:
+        out(f"Couldn't download the model: {e}")
+        return False
+    return True
+
+
+def choose_ai(cfg: Config, ask: Ask, out) -> None:
+    i = _choose(ask, out, [
+        "Free AI on this computer (recommended - free, private, about a 5 GB one-time download)",
+        "Claude (most accurate, about a cent per email, needs a paid key)",
+        "Keyword matching only (free and fast, but asks you about most emails)",
+    ])
+    if i == 0:
+        cfg.ai = "local"
+        if setup_local_ai(cfg, ask, out):
+            out("  The free AI is ready.")
+        else:
+            out("  OK - you can finish this later under Settings. Until then I'll use keyword matching.")
+    elif i == 1:
+        out("Get a key at https://console.anthropic.com -> API Keys -> Create Key (add a little credit under Billing).")
+        while True:
+            key = ask("Paste the key (right-click to paste), or press Enter to go back: ").strip()
+            if not key:
+                return choose_ai(cfg, ask, out)
+            problem = check_api_key(key)
+            if problem is None:
+                cfg.anthropic_api_key, cfg.ai = key, "claude"
+                out("  Key works.")
+                return
+            out("  " + problem)
+    else:
+        cfg.ai = "keywords"
+
+
+def ai_label(cfg: Config) -> str:
+    return {"local": f"free AI on this computer ({cfg.local_model})", "claude": "Claude",
+            "keywords": "keyword matching"}.get(_ai_mode(cfg), "keyword matching")
+
+
+def _ai_mode(cfg: Config) -> str:
+    if cfg.ai:
+        return cfg.ai
+    return "claude" if (cfg.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY")) else "keywords"
+
+
 # ----------------------------------------------------------------------------- setup
 
 def add_account(cfg: Config, ask: Ask, out) -> Optional[AccountConfig]:
@@ -184,22 +255,8 @@ def setup_wizard(ask: Ask = input, out=print) -> Config:
     out("This lets me tell YOUR purchases apart from invoices you send to clients.")
     cfg.company = ask("Company name: ").strip() or None
 
-    out("\nStep 2 of 3 - Claude key")
-    out("Claude reads the emails. Get a key at https://console.anthropic.com -> API Keys -> Create Key.")
-    out("(Add a little credit under Billing first. Each email costs about a cent.)")
-    while True:
-        key = ask("Paste the key (right-click to paste), or type skip: ").strip()
-        if key.lower() == "skip" or not key:
-            out("  OK - without a key I'll use simple keyword matching and ask you about everything.")
-            break
-        problem = check_api_key(key)
-        if problem is None:
-            cfg.anthropic_api_key = key
-            out("  Key works.")
-            break
-        out("  " + problem)
-        if not _yes(ask, "  Try again?"):
-            break
+    out("\nStep 2 of 3 - Which AI reads your emails")
+    choose_ai(cfg, ask, out)
 
     out("\nStep 3 of 3 - Your email")
     while True:
@@ -214,16 +271,24 @@ def setup_wizard(ask: Ask = input, out=print) -> Config:
 
 # ----------------------------------------------------------------------------- menu actions
 
-def _analyzer(cfg: Config, db: Database, out):
+def _analyzer(cfg: Config, db: Database, out, ask: Ask = input):
     cats = all_categories(cfg, db)
-    if cfg.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY"):
+    mode = _ai_mode(cfg)
+    if mode == "claude":
         from .analyzers import ClaudeAnalyzer
 
         return ClaudeAnalyzer(cfg.model, cats, examples_for_prompt(db), company=cfg.company,
                               api_key=cfg.anthropic_api_key)
+    if mode == "local":
+        from .local_ai import LocalAIAnalyzer
+
+        if setup_local_ai(cfg, ask, out):
+            out(f"(Using the free AI on this computer. Each email can take 10-60 seconds.)")
+            return LocalAIAnalyzer(cfg.local_model, cats, examples_for_prompt(db), company=cfg.company,
+                                   url=cfg.ollama_url)
+        out("(The free AI isn't ready - using keyword matching this time.)")
     from .analyzers import OfflineAnalyzer
 
-    out("(No Claude key saved - using keyword matching. Add a key under Settings for better results.)")
     return OfflineAnalyzer(cats)
 
 
@@ -232,7 +297,7 @@ def action_check(cfg: Config, db: Database, ask: Ask, out) -> None:
         out("No email accounts yet - add one under Settings.")
         return
     out("\nChecking your email. This can take a while the first time...\n")
-    result = scan(cfg, db, _analyzer(cfg, db, out), log=out)
+    result = scan(cfg, db, _analyzer(cfg, db, out, ask), log=out)
     paid = result.get("confirmed", 0) + result.get("verified", 0) + result.get("user_confirmed", 0)
     out("\n" + "-" * 50)
     out(f"  Paid purchases found:        {paid}")
@@ -275,12 +340,13 @@ def action_totals(cfg: Config, db: Database, ask: Ask, out) -> None:
 def action_settings(cfg: Config, db: Database, ask: Ask, out) -> None:
     while True:
         out("\nSettings")
+        out(f"Emails are read by: {ai_label(cfg)}")
         out("Email accounts:")
         for a in cfg.accounts or []:
             out(f"  - {describe(a)}")
         if not cfg.accounts:
             out("  (none)")
-        i = _choose(ask, out, ["Add an email account", "Remove an email account", "Change the Claude key",
+        i = _choose(ask, out, ["Add an email account", "Remove an email account", "Change which AI reads emails",
                                "Change company name", "Edit categories (opens in Notepad)",
                                "Open the folder with my files", "Back"])
         if i == 0:
@@ -290,13 +356,8 @@ def action_settings(cfg: Config, db: Database, ask: Ask, out) -> None:
             removed = cfg.accounts.pop(j)
             out(f"Removed {describe(removed)}. (Purchases already found from it are kept.)")
         elif i == 2:
-            key = ask("Paste the new key: ").strip()
-            problem = check_api_key(key) if key else "No key entered."
-            if problem:
-                out(problem)
-            else:
-                cfg.anthropic_api_key = key
-                out("Key saved.")
+            out(f"Right now: {ai_label(cfg)}")
+            choose_ai(cfg, ask, out)
         elif i == 3:
             cfg.company = ask(f"Company name [{cfg.company or ''}]: ").strip() or cfg.company
         elif i == 4:
@@ -319,7 +380,7 @@ MENU = [
     ("Answer questions about items I wasn't sure of", action_review),
     ("Make the Excel spreadsheet", action_spreadsheet),
     ("Show totals", action_totals),
-    ("Settings (email accounts, Claude key, categories)", action_settings),
+    ("Settings (email accounts, which AI, categories)", action_settings),
 ]
 
 
@@ -354,7 +415,10 @@ def self_test() -> int:
     import tempfile
 
     from .analyzers import ClaudeAnalyzer, OfflineAnalyzer
+    from .local_ai import EXTRACTION_SCHEMA, Ollama  # the free-AI support is bundled
     from .sources import build_mime
+
+    assert "$ref" not in str(EXTRACTION_SCHEMA) and not Ollama("http://127.0.0.1:9").running()
 
     ClaudeAnalyzer("claude-opus-5-5", ["Other"], api_key="sk-test")  # the AI library is bundled
     if sys.platform.startswith("win"):
