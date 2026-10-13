@@ -20,7 +20,7 @@ def ex(**kw):
     base = dict(doc_type="receipt", paid_status="paid", paid_evidence="", vendor=None, amount=None,
                 currency="USD", purchase_date=None, invoice_number=None,
                 location=Location(city=None, region=None, country=None, address=None),
-                purpose=None, category="Uncategorized", confidence=0.9, notes="")
+                purpose=None, project=None, category="Uncategorized", confidence=0.9, notes="")
     base.update(kw)
     return Extraction(**base)
 
@@ -78,7 +78,7 @@ def test_scan_with_ai_confirms_verifies_and_links(cfg, db):
         "Re: Invoice INV-2001": Verification(
             paid_status="paid", category="Contractors & Professional Services", confidence=0.92,
             reasoning="Reply in the invoice thread says payment received.", supporting_email_ids=[3],
-            amount=None, purchase_date=None, vendor=None, purpose=None),
+            amount=None, purchase_date=None, vendor=None, purpose=None, project=None),
     }
     analyzer = ScriptedAnalyzer(answers, verdicts)
     result = scan(cfg, db, analyzer, log=lambda *_: None)
@@ -112,14 +112,14 @@ def test_uncertain_goes_to_review_and_answers_are_learned(cfg, db):
                ("Your Staples receipt", "Quote Q-1001 for panel upgrade", "Invoice INV-2001", "Re: Invoice INV-2001")}
     verdicts = {s: Verification(paid_status="unclear", category="Uncategorized", confidence=0.4,
                                 reasoning="Can't tell.", supporting_email_ids=[], amount=None,
-                                purchase_date=None, vendor=None, purpose=None) for s in answers}
+                                purchase_date=None, vendor=None, purpose=None, project=None) for s in answers}
     scan(cfg, db, ScriptedAnalyzer(answers, verdicts), log=lambda *_: None)
     assert {r["status"] for r in db.records()} == {"needs_review"}
 
     cats = all_categories(cfg, db)
     # Items are reviewed in date order: receipt, quote, invoice, ack.
     replies = iter([
-        "y", "1", "84.50", "", "", "Staples", "Austin", "TX", "Paper",   # receipt -> Office Supplies
+        "y", "1", "84.50", "", "", "Staples", "Austin", "TX", "Paper", "",   # receipt -> Office Supplies
         "n",                                                             # quote
         "s",                                                             # invoice: skip
         "q",

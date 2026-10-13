@@ -29,6 +29,7 @@ GROUPERS: dict[str, Callable] = {
     "region": lambda r: r["region"] or "Unknown",
     "country": lambda r: r["country"] or "Unknown",
     "vendor": lambda r: r["vendor"] or "Unknown",
+    "project": lambda r: r["project"] or "No job listed",
     "account": lambda r: r["account"],
 }
 
@@ -96,7 +97,7 @@ def print_list(rows: list, out=print) -> None:
 
 COLUMNS = [
     ("ID", "email_id"), ("Date paid", None), ("Vendor", "vendor"), ("Amount", "amount"), ("Currency", "currency"),
-    ("Category", "category"), ("What for", "purpose"), ("City", "city"), ("State/Region", "region"),
+    ("Category", "category"), ("What for", "purpose"), ("Job / project", "project"), ("City", "city"), ("State/Region", "region"),
     ("Country", "country"), ("Address", "address"), ("Invoice/Order #", "invoice_number"),
     ("Type", "doc_type"), ("Proof of payment", "paid_evidence"), ("How settled", "status"),
     ("Confidence", "confidence"), ("Verification notes", "verify_note"), ("Email account", "account"),
@@ -139,12 +140,12 @@ def export_xlsx(db: Database, rows: list, path: Path) -> None:
         return ws
 
     wb.remove(wb.active)
-    widths = [6, 11, 24, 11, 8, 26, 34, 14, 12, 10, 24, 14, 18, 40, 14, 10, 50, 14, 40, 30, 22]
+    widths = [6, 11, 24, 11, 8, 26, 34, 20, 14, 12, 10, 24, 14, 18, 40, 14, 10, 50, 14, 40, 30, 22]
     ws = sheet("Paid purchases", [c for c, _ in COLUMNS], (_row_values(r) for r in rows), widths)
     for cell in ws["D"][1:]:
         cell.number_format = "#,##0.00"
 
-    for by, title in (("month", "By month"), ("quarter", "By quarter"), ("category", "By category (reason)"),
+    for by, title in (("month", "By month"), ("quarter", "By quarter"), ("category", "By category (reason)"), ("project", "By job or project"),
                       ("place", "By place"), ("vendor", "By vendor"), ("account", "By email account")):
         currencies = sorted({r["currency"] or "?" for r in rows if r["amount"] is not None}) or ["USD"]
         data = [[name, count, *[round(t.get(c, 0.0), 2) for c in currencies]] for name, count, t in group(rows, by)]

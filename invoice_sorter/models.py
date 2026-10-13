@@ -78,6 +78,7 @@ class Extraction(BaseModel):
     invoice_number: Optional[str] = Field(description="Invoice, receipt, order or quote number")
     location: Location
     purpose: Optional[str] = Field(description="What was bought and why, in a few words")
+    project: Optional[str] = Field(description="Job, project, PO or client name the purchase was for, if mentioned")
     category: str = Field(description="Exactly one of the allowed categories, or 'Uncategorized'")
     confidence: float = Field(description="0.0-1.0: how sure you are about paid_status AND category together")
     notes: str = Field(description="Anything uncertain or worth flagging. Empty if nothing.")
@@ -95,3 +96,4 @@ class Verification(BaseModel):
     purchase_date: Optional[str] = Field(description="Corrected/filled YYYY-MM-DD, or null to keep")
     vendor: Optional[str] = Field(description="Corrected/filled vendor, or null to keep")
     purpose: Optional[str] = Field(description="Corrected/filled purpose, or null to keep")
+    project: Optional[str] = Field(description="Corrected/filled job/project name, or null to keep")

@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS records (
     doc_type TEXT, paid_status TEXT, paid_evidence TEXT,
     vendor TEXT, amount REAL, currency TEXT, purchase_date TEXT, invoice_number TEXT,
     city TEXT, region TEXT, country TEXT, address TEXT,
-    purpose TEXT, category TEXT, confidence REAL, notes TEXT,
+    purpose TEXT, project TEXT, category TEXT, confidence REAL, notes TEXT,
     status TEXT NOT NULL,
     verify_note TEXT,
     linked_email_ids TEXT,
@@ -59,6 +59,10 @@ class Database:
         self.conn = sqlite3.connect(str(path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(records)")}
+        if "project" not in cols:  # databases created before job/project tracking
+            self.conn.execute("ALTER TABLE records ADD COLUMN project TEXT")
+            self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -121,14 +125,14 @@ class Database:
         self.conn.execute(
             """INSERT OR REPLACE INTO records
                (email_id, doc_type, paid_status, paid_evidence, vendor, amount, currency,
-                purchase_date, invoice_number, city, region, country, address, purpose,
+                purchase_date, invoice_number, city, region, country, address, purpose, project,
                 category, confidence, notes, status, verify_note, linked_email_ids,
                 duplicate_of, analysed_by, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,'[]',NULL,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,'[]',NULL,?,?)""",
             (
                 email_id, ex.doc_type, ex.paid_status, ex.paid_evidence, ex.vendor, ex.amount,
                 ex.currency, ex.purchase_date, ex.invoice_number, loc.city, loc.region,
-                loc.country, loc.address, ex.purpose, ex.category, ex.confidence, ex.notes,
+                loc.country, loc.address, ex.purpose, ex.project, ex.category, ex.confidence, ex.notes,
                 status, analysed_by, now(),
             ),
         )

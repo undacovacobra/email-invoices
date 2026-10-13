@@ -35,19 +35,23 @@ DEFAULT_SEARCH_KEYWORDS = [
 @dataclass
 class AccountConfig:
     name: str
-    type: str  # imap | mbox | eml_folder
+    type: str  # outlook_app | imap | mbox | eml_folder
     host: Optional[str] = None
     port: int = 993
     username: Optional[str] = None
     password_env: Optional[str] = None
+    password_value: Optional[str] = None  # stored by the setup wizard
     folders: list[str] = field(default_factory=lambda: ["INBOX"])
     since: Optional[str] = None  # YYYY-MM-DD
     path: Optional[str] = None
+    mailbox: Optional[str] = None  # outlook_app: which mailbox (blank = all)
     search_keywords: list[str] = field(default_factory=lambda: list(DEFAULT_SEARCH_KEYWORDS))
 
     def password(self) -> str:
+        if self.password_value:
+            return self.password_value
         if not self.password_env:
-            raise ValueError(f"Account '{self.name}': set password_env to the name of an environment variable")
+            raise ValueError(f"Account '{self.name}': no password saved")
         value = os.environ.get(self.password_env)
         if not value:
             raise ValueError(f"Account '{self.name}': environment variable {self.password_env} is not set")
@@ -59,6 +63,8 @@ class Config:
     database: str = "invoices.db"
     model: str = "claude-opus-5-5"
     confidence_threshold: float = 0.8
+    company: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
     categories: list[str] = field(default_factory=lambda: list(DEFAULT_CATEGORIES))
     accounts: list[AccountConfig] = field(default_factory=list)
     base_dir: Path = Path(".")
@@ -71,7 +77,7 @@ class Config:
 
 def load_config(path: str | Path) -> Config:
     path = Path(path)
-    data = yaml.safe_load(path.read_text()) or {}
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     accounts = []
     for raw in data.get("accounts") or []:
         raw = dict(raw)
@@ -88,7 +94,37 @@ def load_config(path: str | Path) -> Config:
         database=data.get("database", "invoices.db"),
         model=data.get("model", "claude-opus-5-5"),
         confidence_threshold=float(data.get("confidence_threshold", 0.8)),
+        company=data.get("company"),
+        anthropic_api_key=data.get("anthropic_api_key"),
         categories=list(data.get("categories") or DEFAULT_CATEGORIES),
         accounts=accounts,
         base_dir=path.parent,
+    )
+
+
+def save_config(cfg: Config, path: str | Path) -> None:
+    """Write settings back to disk (used by the setup wizard)."""
+    defaults = AccountConfig(name="", type="")
+    accounts = []
+    for a in cfg.accounts:
+        entry = {"name": a.name, "type": a.type}
+        for key in ("host", "port", "username", "password_env", "password_value", "folders", "since",
+                    "path", "mailbox", "search_keywords"):
+            value = getattr(a, key)
+            if value not in (None, "") and value != getattr(defaults, key):
+                entry[key] = value
+        accounts.append(entry)
+    data = {
+        "company": cfg.company,
+        "anthropic_api_key": cfg.anthropic_api_key,
+        "database": cfg.database,
+        "model": cfg.model,
+        "confidence_threshold": cfg.confidence_threshold,
+        "categories": cfg.categories,
+        "accounts": accounts,
+    }
+    Path(path).write_text(
+        "# Settings for Paid Purchases. The setup wizard writes this file; you can also edit it.\n"
+        + yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
     )

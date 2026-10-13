@@ -35,11 +35,12 @@ def _analyzer(args, cfg: Config, db: Database):
         return OfflineAnalyzer(cats)
     from .analyzers import ClaudeAnalyzer
 
-    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    if not (cfg.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
             or shutil.which("ant")):
         raise SystemExit("No Claude credentials found. Set ANTHROPIC_API_KEY (or run `ant auth login`), "
                          "or use --offline.")
-    return ClaudeAnalyzer(cfg.model, cats, examples_for_prompt(db))
+    return ClaudeAnalyzer(cfg.model, cats, examples_for_prompt(db), company=cfg.company,
+                          api_key=cfg.anthropic_api_key)
 
 
 def cmd_init(args) -> None:
@@ -89,7 +90,7 @@ def cmd_set(args) -> None:
     paid = True if args.paid else False if args.not_paid else None
     set_fields(db, args.id, all_categories(cfg, db), paid=paid, category=args.category, amount=args.amount,
                currency=args.currency, purchase_date=args.date, vendor=args.vendor, city=args.city,
-               region=args.region, country=args.country, purpose=args.purpose)
+               region=args.region, country=args.country, purpose=args.purpose, project=args.project)
     print("Saved.")
     show(db.record(args.id), excerpt_chars=0)
 
@@ -161,7 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
     g = p.add_mutually_exclusive_group()
     g.add_argument("--paid", action="store_true")
     g.add_argument("--not-paid", action="store_true")
-    for f in ("category", "currency", "date", "vendor", "city", "region", "country", "purpose"):
+    for f in ("category", "currency", "date", "vendor", "city", "region", "country", "purpose", "project"):
         p.add_argument(f"--{f}")
     p.add_argument("--amount", type=float)
     p.set_defaults(func=cmd_set)

@@ -38,7 +38,44 @@ your mailboxes ──► keyword filter ──► Claude reads each email (+ PDF
 * Every counted item keeps the evidence quote and a note on how it was settled
   (confident / double-checked / confirmed by you), so you can audit it.
 
-## Setup
+## Getting started on Windows (no installing, no typing commands)
+
+1. **Download** [PaidPurchases.exe](https://github.com/undacovacobra/email-invoices/releases/latest/download/PaidPurchases.exe)
+   (sign in to GitHub first if it asks).
+2. **Double-click** it. If Windows says *"Windows protected your PC"*, click **More info**, then **Run anyway**.
+   (That message shows for any program that isn't from a big software company.)
+3. **Answer the three setup questions.** It only asks once:
+   - your company name, so invoices you *send* to clients aren't counted as purchases
+   - a Claude key: [console.anthropic.com](https://console.anthropic.com) → **API Keys** → **Create Key**, then right-click to paste
+     (add a little credit under Billing first; it's about a cent per email)
+   - where your email is. Pick **"The Outlook app on this computer"** for Microsoft 365 / work Outlook,
+     so no password is needed.
+4. Then just type a number from the menu:
+
+```
+ 1) Check my email for receipts and invoices
+ 2) Answer questions about items I wasn't sure of   (3 waiting)
+ 3) Make the Excel spreadsheet
+ 4) Show totals
+ 5) Settings (email accounts, Claude key, categories)
+ 6) Exit
+```
+
+Everything is kept in **Documents\Paid Purchases**: your settings, the data, and each spreadsheet you make.
+Your email is only read; nothing is moved, deleted, sent, or marked as read.
+
+**Email options in the setup:**
+
+| Your email | Pick |
+|---|---|
+| Microsoft 365 / work Outlook, with the Outlook app installed | **The Outlook app on this computer** (no password needed) |
+| Gmail / Google Workspace | **Gmail**, then follow the on-screen steps to create an "app password" |
+| Yahoo, iCloud, others | **Another email provider** |
+| Anything else, or the *new* Outlook app | Drag the emails into a folder, then pick **A folder of emails I saved** (.msg and .eml both work) |
+
+You can add more email accounts any time under **Settings**.
+
+## For developers: command-line version
 
 Requires Python 3.10+.
 
@@ -53,47 +90,10 @@ the file; each account names an environment variable that holds it.
 
 | Email provider | How to connect |
 |---|---|
-| Gmail / Google Workspace | `type: imap`, host `imap.gmail.com`, an [App Password](https://myaccount.google.com/apppasswords) (needs 2-step verification) |
+| Outlook desktop app (Windows) | `type: outlook_app` (optional `mailbox:`); needs `pip install -e '.[windows]'` |
+| Gmail / Google Workspace | `type: imap`, host `imap.gmail.com`, an [App Password](https://myaccount.google.com/apppasswords) |
 | Yahoo, iCloud, Fastmail, most web hosts | `type: imap` with the provider's IMAP host and an app password |
-| Outlook / Microsoft 365 work accounts | Most companies turn off password-based IMAP. Export the folder to `.mbox`, or drag the emails into a folder and use `type: eml_folder` |
-| Anything else | `type: mbox` (exported mailbox) or `type: eml_folder` (folder of saved `.eml` files) |
-
-Mail is opened read-only: nothing is moved, deleted, or marked as read. Everything is stored
-locally in `invoices.db`.
-
-## Daily use
-
-```bash
-invoice-sorter scan                 # read new mail from every account, analyse, double-check
-invoice-sorter review               # answer questions about the items it couldn't settle
-invoice-sorter summary --by month   # or: quarter, year, category, place, city, region, vendor, account
-invoice-sorter summary --by place --since 2026-01-01 --category "Travel - Lodging"
-invoice-sorter list                 # every paid purchase, one per line
-invoice-sorter list --review        # what's waiting for you
-invoice-sorter export --out purchases.xlsx
-```
-
-The spreadsheet has a filterable **Paid purchases** tab plus tabs grouped **by month, quarter,
-category (reason), place, vendor, and email account**, a **month × category** grid, a
-**Needs your review** tab, and a **Not counted** tab listing every quote/unpaid invoice/duplicate
-with the reason it was left out. Use `--out file.csv` for a plain CSV.
-
-Fixing one item without the interactive review:
-
-```bash
-invoice-sorter show 42
-invoice-sorter set 42 --paid --category "Equipment & Hardware" --city Denver --region CO
-invoice-sorter set 43 --not-paid
-```
-
-Other options:
-
-* `scan --account work-gmail` only reads that account.
-* `scan --all` analyses every email, not just ones that look purchase-related.
-* `scan --offline` uses keyword rules with no AI. It still links related emails, but it never
-  decides anything by itself, so everything it finds goes to your review queue.
-* `confidence_threshold` in `config.yaml` (default 0.8) sets how sure the AI must be. Raise it
-  to be asked more often; lower it to be asked less.
+| Anything else | `type: mbox` (exported mailbox) or `type: eml_folder` (folder of `.eml` / `.msg` files) |
 
 ## Cost
 
@@ -107,3 +107,7 @@ keywords first and never sent.
 pip install -e '.[dev]'
 pytest
 ```
+
+The Windows `.exe` is built by `.github/workflows/windows-app.yml` on every push. That workflow runs the
+tests on Windows, packages the app with PyInstaller, checks it with `PaidPurchases.exe --self-test`, and
+publishes it as the latest GitHub release.

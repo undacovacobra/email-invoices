@@ -66,7 +66,7 @@ def analyse(cfg: Config, db: Database, analyzer: Analyzer, include_all: bool = F
                 doc_type="not_a_purchase", paid_status="unclear", paid_evidence="", vendor=None, amount=None,
                 currency=None, purchase_date=(email.date or "")[:10] or None, invoice_number=None,
                 location=Location(city=None, region=None, country=None, address=None), purpose=email.subject,
-                category=UNCATEGORIZED, confidence=0.0, notes=str(e),
+                project=None, category=UNCATEGORIZED, confidence=0.0, notes=str(e),
             )
             status = NEEDS_REVIEW
         db.save_extraction(row["id"], ex, status, analyzer.name)

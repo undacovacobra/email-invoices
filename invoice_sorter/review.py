@@ -37,7 +37,7 @@ def show(rec, out=print, excerpt_chars: int = 1200) -> None:
         f"confidence {rec['confidence'] or 0:.0%}")
     out(f"  {rec['vendor'] or 'unknown vendor'} - {_fmt_amount(rec)} - {rec['purchase_date'] or 'no date'}")
     out(f"  Category: {rec['category']}   Place: {_place(rec) or 'unknown'}")
-    out(f"  For: {rec['purpose'] or 'unknown'}")
+    out(f"  For: {rec['purpose'] or 'unknown'}" + (f"   Job: {rec['project']}" if rec["project"] else ""))
     if rec["paid_evidence"]:
         out(f"  Evidence: \"{rec['paid_evidence']}\"")
     if rec["notes"]:
@@ -122,7 +122,7 @@ def _review(db: Database, categories: list[str], ask: Ask, out, include_all: boo
         changes["category"] = _choose_category(categories, rec["category"], ask, out)
         for field, label in (("amount", "Amount"), ("currency", "Currency"), ("purchase_date", "Date paid (YYYY-MM-DD)"),
                              ("vendor", "Vendor"), ("city", "City"), ("region", "State/region"),
-                             ("purpose", "What was it for")):
+                             ("purpose", "What was it for"), ("project", "Job / project")):
             current = rec[field]
             ans = ask(f"{label} [{'' if current is None else current}]: ").strip()
             if ans:

@@ -32,7 +32,8 @@ from .models import (
 
 MATCH_WINDOW_DAYS = 120
 MAX_RELATED = 5
-BACKFILL_FIELDS = ("vendor", "amount", "currency", "invoice_number", "purpose", "city", "region", "country", "address")
+BACKFILL_FIELDS = ("vendor", "amount", "currency", "invoice_number", "purpose", "project", "city", "region", "country",
+                   "address")
 _SUFFIXES = {"inc", "llc", "ltd", "co", "corp", "company", "the", "gmbh", "plc", "limited"}
 
 
@@ -185,7 +186,7 @@ def related_emails(db: Database, rec: sqlite3.Row) -> list[int]:
 
 def prior_summary(rec: sqlite3.Row) -> dict:
     keys = ("doc_type", "paid_status", "paid_evidence", "vendor", "amount", "currency", "purchase_date",
-            "invoice_number", "city", "region", "country", "purpose", "category", "confidence", "notes", "verify_note")
+            "invoice_number", "city", "region", "country", "purpose", "project", "category", "confidence", "notes", "verify_note")
     return {k: rec[k] for k in keys}
 
 
@@ -204,7 +205,7 @@ def verify_pending(db: Database, analyzer: Analyzer, threshold: float, log=print
         fields: dict = {"paid_status": v.paid_status, "confidence": v.confidence}
         if v.category and (v.category != UNCATEGORIZED or rec["category"] == UNCATEGORIZED):
             fields["category"] = v.category
-        for f in ("amount", "purchase_date", "vendor", "purpose"):
+        for f in ("amount", "purchase_date", "vendor", "purpose", "project"):
             if getattr(v, f) not in (None, ""):
                 fields[f] = getattr(v, f)
         category = fields.get("category", rec["category"])

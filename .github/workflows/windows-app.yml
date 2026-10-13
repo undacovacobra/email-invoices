@@ -1,0 +1,55 @@
+name: Build Windows app
+
+on:
+  push:
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,windows]" pyinstaller==6.22.3
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Build PaidPurchases.exe
+        run: >
+          pyinstaller --onefile --console --name PaidPurchases --noconfirm --paths .
+          --collect-all anthropic --collect-all httpx2 --collect-all certifi
+          --collect-all extract_msg --collect-all openpyxl
+          --hidden-import win32com.client --hidden-import pythoncom --hidden-import pywintypes
+          packaging/launcher.py
+
+      - name: Check the built app works
+        run: dist\PaidPurchases.exe --self-test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PaidPurchases
+          path: dist/PaidPurchases.exe
+
+      - name: Publish download
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-build-${{ github.run_number }}
+          name: Paid Purchases for Windows (build ${{ github.run_number }})
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: dist/PaidPurchases.exe
+          body: |
+            Download **PaidPurchases.exe** below and double-click it.
+            If Windows shows "Windows protected your PC", click **More info** then **Run anyway**.
