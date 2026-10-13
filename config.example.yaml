@@ -1,0 +1,54 @@
+# Copy to config.yaml (or run `invoice-sorter init`) and fill in your accounts.
+# Passwords are never written here - each account names an environment variable instead.
+
+database: invoices.db            # everything is stored locally in this file
+model: claude-opus-5-5
+confidence_threshold: 0.8        # below this, an item is double-checked; still unsure -> you review it
+
+# Reasons for purchases. Edit freely. The AI only uses these names; new ones you
+# type during `review` are added automatically.
+categories:
+  - Office Supplies
+  - Software & Subscriptions
+  - Equipment & Hardware
+  - Travel - Airfare
+  - Travel - Lodging
+  - Travel - Ground Transport
+  - Meals & Entertainment
+  - Contractors & Professional Services
+  - Materials & Inventory
+  - Shipping & Postage
+  - Utilities & Telecom
+  - Repairs & Maintenance
+  - Training & Events
+  - Other
+
+accounts:
+  # Gmail / Google Workspace: turn on 2-step verification, create an App Password,
+  # then: export WORK_GMAIL_PASSWORD="xxxx xxxx xxxx xxxx"
+  - name: work-gmail
+    type: imap
+    host: imap.gmail.com
+    username: you@yourcompany.com
+    password_env: WORK_GMAIL_PASSWORD
+    folders: ["[Gmail]/All Mail"]
+    since: 2026-01-01
+
+  # Yahoo, iCloud, Fastmail, most hosting providers work the same way with their IMAP host.
+  # - name: personal-yahoo
+  #   type: imap
+  #   host: imap.mail.yahoo.com
+  #   username: you@yahoo.com
+  #   password_env: YAHOO_APP_PASSWORD
+  #   folders: ["INBOX"]
+  #   since: 2026-01-01
+
+  # Any mailbox you can export (Outlook, Apple Mail, Google Takeout) as an .mbox file:
+  # - name: outlook-export
+  #   type: mbox
+  #   path: ~/Downloads/outlook-export.mbox
+
+  # A folder of saved .eml files (drag emails out of Outlook / Apple Mail into a folder):
+  # - name: saved-receipts
+  #   type: eml_folder
+  #   path: ~/Documents/receipts

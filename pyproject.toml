@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "invoice-sorter"
+version = "0.1.0"
+description = "Find paid invoices, receipts and payment confirmations across your email accounts and organise them by date, place and reason."
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=1.13,<2",
+    "pydantic>=2",
+    "pypdf>=4",
+    "openpyxl>=3.1",
+    "PyYAML>=6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+invoice-sorter = "invoice_sorter.cli:main"
+
+[tool.setuptools]
+packages = ["invoice_sorter"]
