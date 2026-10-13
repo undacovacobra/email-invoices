@@ -73,3 +73,16 @@ def test_outlook_item_conversion():
     assert email.date.startswith("2026-09-23")
     assert email.body_text == "Paid $111.00"
     assert [(a.filename, a.content_type) for a in email.attachments] == [("invoice.pdf", "application/pdf")]
+
+
+def test_outlook_wait_gives_up_instead_of_hanging(monkeypatch):
+    import time
+
+    from invoice_sorter import sources
+
+    monkeypatch.setattr(sources, "outlook_mailboxes", lambda: time.sleep(5) or ["x"])
+    start = time.time()
+    assert sources.outlook_mailboxes_waiting(0.3) is None
+    assert time.time() - start < 2
+    monkeypatch.setattr(sources, "outlook_mailboxes", lambda: ["travis@coastaledgedesign.com"])
+    assert sources.outlook_mailboxes_waiting(5) == ["travis@coastaledgedesign.com"]

@@ -19,7 +19,7 @@ from .db import Database
 from .models import NEEDS_REVIEW
 from .pipeline import all_categories, scan
 from .review import examples_for_prompt, review
-from .sources import outlook_mailboxes
+from .sources import outlook_mailboxes_waiting
 
 Ask = Callable[[str], str]
 APP_NAME = "Paid Purchases"
@@ -190,7 +190,15 @@ def add_account(cfg: Config, ask: Ask, out) -> Optional[AccountConfig]:
         return None
 
     if choice == 0:
-        boxes = outlook_mailboxes()
+        out("\nConnecting to Outlook. This can take up to a minute.")
+        out("If Outlook asks whether to allow access, tick 'Allow access for', choose 10 minutes, and click Allow.")
+        out("(Check the taskbar for a flashing Outlook icon - the question can hide behind other windows.)")
+        boxes = outlook_mailboxes_waiting(90)
+        if boxes is None:
+            out("\nOutlook didn't answer. Open Outlook yourself, make sure your inbox has loaded and no")
+            out("message is waiting for you in it, then try this step again. If you use the 'new Outlook',")
+            out("pick option 4 instead and drag your emails into a folder.")
+            return None
         if not boxes:
             out("\nI couldn't open the Outlook app. Make sure classic Outlook is installed and you are signed in,")
             out("then try again. (The 'new Outlook' can't be read this way - use option 4 instead:")

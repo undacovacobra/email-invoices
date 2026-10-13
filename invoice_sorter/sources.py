@@ -134,6 +134,31 @@ def outlook_mailboxes() -> list[str]:
         return []
 
 
+def outlook_mailboxes_waiting(timeout: float = 90) -> Optional[list[str]]:
+    """Like outlook_mailboxes, but gives up after `timeout` seconds (None) instead of hanging.
+
+    Outlook can block while it starts, waits for a sign-in, or shows its
+    "allow access?" prompt behind other windows.
+    """
+    import threading
+
+    result: list = []
+
+    def work() -> None:
+        try:
+            import pythoncom  # COM needs setting up on each thread that uses it
+
+            pythoncom.CoInitialize()
+        except Exception:
+            pass
+        result.append(outlook_mailboxes())
+
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    t.join(timeout)
+    return result[0] if result else None
+
+
 def _outlook_namespace():
     import win32com.client  # from pywin32; only on Windows
 
