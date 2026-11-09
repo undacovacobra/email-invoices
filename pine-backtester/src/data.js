@@ -1,5 +1,50 @@
 // OHLCV data loading: CSV (including TradingView's "Export chart data" file),
 // a public crypto exchange feed, and a synthetic sample series.
+import { sessionBucket } from './runtime.js';
+
+// Timeframes offered in the UI, in seconds.
+export const TIMEFRAMES = [
+  ['1', '1m', 60], ['3', '3m', 180], ['5', '5m', 300], ['15', '15m', 900], ['30', '30m', 1800], ['45', '45m', 2700],
+  ['60', '1h', 3600], ['120', '2h', 7200], ['180', '3h', 10800], ['240', '4h', 14400], ['D', '1D', 86400],
+];
+
+// Typical spacing between bars, in seconds.
+export function barSeconds(d) {
+  const diffs = [];
+  for (let i = 1; i < Math.min(d.time.length, 500); i++) diffs.push(d.time[i] - d.time[i - 1]);
+  diffs.sort((a, b) => a - b);
+  return Math.round((diffs[Math.floor(diffs.length / 2)] || 60000) / 1000);
+}
+
+// Session each kind of market's bars are anchored to (see sessionBucket in runtime.js).
+export const SESSIONS = {
+  futures: { tz: 'America/New_York', start: 18 * 60 }, // CME Globex opens 18:00 New York
+  stocks: { tz: 'America/New_York', start: 9 * 60 + 30 },
+  crypto: { tz: 'UTC', start: 0 },
+};
+
+// Combine bars into a higher timeframe, anchored to the market's session open
+// (e.g. MNQ 4h bars start 18:00, 22:00, 02:00 ... New York; daily bars run 18:00 -> 17:00).
+export function resample(d, seconds, session = SESSIONS.crypto) {
+  const bucketOf = (t) => sessionBucket(t, seconds, session, '');
+  const out = { time: [], open: [], high: [], low: [], close: [], volume: [] };
+  let prev = null;
+  for (let i = 0; i < d.time.length; i++) {
+    const b = bucketOf(d.time[i]);
+    if (b !== prev) {
+      out.time.push(d.time[i]); out.open.push(d.open[i]); out.high.push(d.high[i]); out.low.push(d.low[i]);
+      out.close.push(d.close[i]); out.volume.push(d.volume[i]);
+      prev = b;
+    } else {
+      const j = out.time.length - 1;
+      if (d.high[i] > out.high[j]) out.high[j] = d.high[i];
+      if (d.low[i] < out.low[j]) out.low[j] = d.low[i];
+      out.close[j] = d.close[i];
+      out.volume[j] += d.volume[i];
+    }
+  }
+  return out;
+}
 
 function parseTime(v) {
   const s = String(v).trim().replace(/^"|"$/g, '');

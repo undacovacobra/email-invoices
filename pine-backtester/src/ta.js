@@ -384,7 +384,7 @@ export const TA = {
   vwap: [['source'], (rt, k, s) => {
     const b = rt.bar;
     const o = st(rt, k);
-    const day = Math.floor(rt.data.time[b] / DAY_MS);
+    const day = rt.dayKey ? rt.dayKey(rt.data.time[b]) : Math.floor(rt.data.time[b] / DAY_MS);
     const pv = num(s === undefined ? (rt.data.high[b] + rt.data.low[b] + rt.data.close[b]) / 3 : s) * rt.data.volume[b];
     const prevDay = at(o.day || [], b - 1);
     const reset = prevDay !== day;

@@ -198,6 +198,8 @@ export class Runtime {
     this.opts = options;
     this.inputOverrides = options.inputs || {};
     this.tz = options.timezone || 'UTC';
+    // where higher-timeframe bars and daily resets start (see sessionBucket)
+    this.session = options.session || { tz: this.tz, start: 0 };
     this.mintick = options.mintick || inferMintick(data);
     this.pointvalue = options.pointvalue || 1;
     this.tf = options.timeframe ? { ...inferTimeframe(data.time), period: options.timeframe } : inferTimeframe(data.time);
@@ -300,6 +302,9 @@ export class Runtime {
     }
     return out;
   }
+
+  // trading-day number of a timestamp (session-anchored), used by ta.vwap
+  dayKey(t) { return sessionBucket(t, 86400, this.session, ''); }
 
   snapshotStrategy(b) {
     const br = this.broker;
@@ -746,7 +751,7 @@ export class Runtime {
     const user = this.functions.get(name);
     if (user) return this.callUser(user, n, ctx);
     if (name === 'request.security') return this.evalSecurity(n, ctx);
-    if (name === 'runtime.error') throw new PineRuntimeError(String(this.eval(n.args[0] || n.named.message, ctx)), n.line);
+    if (name === 'runtime.error') throw new PineRuntimeError(`the script stopped itself (runtime.error): ${this.eval(n.args[0] || n.named.message, ctx)}`, n.line);
     const tdot = name.lastIndexOf('.');
     if (tdot > 0 && this.types.has(name.slice(0, tdot))) return this.udtCall(name.slice(0, tdot), name.slice(tdot + 1), n, ctx);
     if (this.builtins[name]) {
@@ -828,7 +833,7 @@ export class Runtime {
     const key = `${this.callKey(n, ctx)}|${tf}`;
     let sec = this.securities.get(key);
     if (!sec) {
-      sec = buildHigherTimeframe(this.data, tf, secs, this.tz, this.tf.seconds);
+      sec = buildHigherTimeframe(this.data, tf, secs, this.session, this.tf.seconds);
       sec.values = [];
       sec.done = -1;
       sec.varSlots = [];
@@ -1300,17 +1305,38 @@ function buildBuiltins(rt) {
   return B;
 }
 
-function buildHigherTimeframe(d, tf, secs, tz, chartSecs) {
+// Which higher-timeframe bar a timestamp belongs to. Bars are anchored to the
+// market's session open the way TradingView builds them: CME futures days run
+// 18:00 -> 17:00 New York (so 4h bars start 18:00, 22:00, 02:00, ...), US stocks
+// start at 09:30 New York, crypto at 00:00 UTC.
+//   session = { tz, start }  (start = minutes after local midnight)
+export function sessionBucket(ms, secs, session, unit = '') {
+  const DAYMS = 86400000;
+  const p = timeParts(ms, session.tz);
+  const local = Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi, p.s) - session.start * 60000;
+  const day = Math.floor(local / DAYMS);
+  if (unit === 'M') {
+    const q = new Date(local);
+    return q.getUTCFullYear() * 12 + q.getUTCMonth();
+  }
+  if (unit === 'W') {
+    // evening sessions (futures) open the week on Sunday, others on Monday
+    const shift = session.start >= 12 * 60 ? 4 : 3;
+    return Math.floor((day + shift) / 7);
+  }
+  if (secs >= 86400) return Math.floor(day / Math.round(secs / 86400));
+  const perDay = Math.ceil(86400 / secs);
+  return day * perDay + Math.floor((local - day * DAYMS) / (secs * 1000));
+}
+
+function buildHigherTimeframe(d, tf, secs, session, chartSecs) {
   const m = /^(\d*)([SDWM]?)$/.exec(tf) || [];
   const k = m[1] ? +m[1] : 1;
   const unit = m[2] || '';
   const bucket = (t) => {
-    if (unit === '' || unit === 'S') return Math.floor(t / (secs * 1000));
-    const p = timeParts(t, tz);
-    const day = Date.UTC(p.y, p.mo - 1, p.d) / 86400000;
-    if (unit === 'D') return Math.floor(day / k);
-    if (unit === 'W') return Math.floor((day + 3) / (7 * k)); // weeks start on Monday
-    return Math.floor((p.y * 12 + p.mo - 1) / k);
+    if (unit === 'M') return Math.floor(sessionBucket(t, secs, session, 'M') / k);
+    if (unit === 'W') return Math.floor(sessionBucket(t, secs, session, 'W') / k);
+    return sessionBucket(t, secs, session, '');
   };
   const out = { time: [], open: [], high: [], low: [], close: [], volume: [] };
   const map = new Int32Array(d.time.length);

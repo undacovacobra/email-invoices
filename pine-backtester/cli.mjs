@@ -2,7 +2,7 @@
 // Command-line backtest:  node cli.mjs my_strategy.pine data.csv [--input "Fast length=10"] [--json]
 import { readFileSync } from 'node:fs';
 import { runScript } from './src/runtime.js';
-import { parseCSV, sampleData, guessContract } from './src/data.js';
+import { parseCSV, sampleData, guessContract, SESSIONS } from './src/data.js';
 
 const args = process.argv.slice(2);
 const flags = { inputs: {}, json: false, trades: false, tz: 'UTC', pointvalue: undefined, mintick: undefined };
@@ -38,7 +38,7 @@ if (contract && (flags.pointvalue === undefined || flags.mintick === undefined))
 }
 let res;
 try {
-  res = runScript(source, data, { inputs: flags.inputs, timezone: flags.tz, pointvalue, mintick });
+  res = runScript(source, data, { inputs: flags.inputs, timezone: flags.tz, pointvalue, mintick, session: contract ? SESSIONS.futures : undefined });
 } catch (e) {
   console.error(String(e.message || e));
   process.exit(1);

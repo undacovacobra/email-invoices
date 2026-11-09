@@ -37,7 +37,7 @@ const workerSrc = [...ENGINE, 'app/worker.js'].map(wrap).join('\n');
 const bundle = `window.__PBT_ENGINE__ = ${JSON.stringify(workerSrc)};\n${MODULES.map(wrap).join('\n')}`;
 const html = read('app/index.html');
 let body = html.slice(html.indexOf('<!-- APP:BEGIN -->') + 18, html.indexOf('<!-- APP:END -->'));
-if (hosted) body = body.replace(/\s*<option value="binance">[^<]*<\/option>/, '');
+if (hosted) body = body.replace(/\s*<option value="(binance|market)">[^<]*<\/option>/g, '');
 const css = read('app/style.css');
 const fonts = '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">';
 const lw = '<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>';

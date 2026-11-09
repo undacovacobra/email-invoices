@@ -37,6 +37,14 @@ No install needed. Any one of these:
 
 ## Getting your data in
 
+* **Market data** (when running `node serve.mjs`) – type a symbol and the history
+  downloads by itself, as far back as the free Yahoo Finance feed goes and up to the
+  latest minute: futures as `MNQ1!`, `ES1!`, `NQ1!`, `GC1!`…, stocks as `AAPL`, `SPY`,
+  crypto as `BTCUSD`. How far back depends on the timeframe: 1m ≈ 30 days, 5m/15m/30m
+  ≈ 60 days, 1h ≈ 2 years, 1D decades. Yahoo's continuous futures contract can roll on
+  a different day than TradingView's `MNQ1!`, so prices near a roll can differ slightly.
+  For a full year of 1-minute bars you'd need a paid data vendor; export it to CSV and
+  open it here.
 * **CSV file** – any file with `time/date, open, high, low, close[, volume]` columns
   (comma, semicolon or tab separated; unix seconds/ms or `YYYY-MM-DD[ HH:MM]` times).
   TradingView's own **Export chart data…** CSV works as-is, so you can backtest on
@@ -53,6 +61,13 @@ code (for example TradingView's export name `CME_MINI_MNQ1!, 1.csv`) the point v
 and tick size are filled in automatically: MNQ $2/pt and 0.25 tick, NQ $20, MES $5,
 ES $50, M2K/RTY, MYM/YM, MGC/GC, MCL/CL and more. Check or change them in
 **Settings → Properties → Symbol** (CLI: `--pointvalue 2 --mintick 0.25`).
+
+**Timeframe** (top bar) switches the chart from 1 minute to 1 day. With market data the
+right history is downloaded; with a CSV, higher timeframes are built from the file's bars.
+Bars are anchored to the market's session open like TradingView builds them: CME futures
+days run 18:00 → 17:00 New York (4h bars start 18:00, 22:00, 02:00…), US stocks start at
+09:30, crypto at 00:00 UTC. The same anchoring is used for `request.security()` and the
+daily reset of `ta.vwap`.
 
 Pick the **Time** zone your TradingView chart uses (for CME futures that's usually New
 York or Chicago) so trade times line up with TradingView's List of Trades. The script's
@@ -74,6 +89,10 @@ The broker emulator follows the rules TradingView documents for its Strategy Tes
 | `strategy.exit` | profit/limit, loss/stop and trailing (`trail_points`/`trail_price` + `trail_offset`) brackets per entry, one-cancels-the-other; can fill on the entry bar |
 | Order size | `strategy.fixed` / `strategy.cash` / `strategy.percent_of_equity`, sized from the signal bar's close |
 | Costs | commission (percent, per contract, per order) and slippage in ticks |
+
+**Overview chart**: equity trade by trade (or bar by bar), drawdown hanging from the
+top, optional per-trade run-up / drawdown bars and buy & hold, in currency or percent;
+hover for each trade's numbers.
 
 Performance summary: net/gross profit, profit factor, max equity drawdown and
 run-up (intrabar), buy & hold, Sharpe and Sortino (monthly returns, 2% risk-free),
@@ -109,12 +128,10 @@ win rate, average/largest trades, bars in trade, commission, open P&L.
 
 * `request.security()` for other symbols or lower timeframes, `import` of libraries,
   `map`/`matrix`, methods on user-defined types.
-* Higher-timeframe bars are cut on clock boundaries (UTC, or the selected time zone for
-  daily and above). TradingView cuts futures bars at the exchange session open, so 4h /
-  daily values from `request.security` can differ for futures.
+* Session anchoring covers CME-style futures, US stocks and crypto. Other markets (and
+  CSV files with no recognised contract code) use midnight in the selected time zone.
 * Drawings (`label.*`, `line.*`, `box.*`, `table.*`) and `fill()` are accepted but not drawn.
 * Margin calls, bar magnifier, `calc_on_every_tick`/realtime bars, `strategy.risk.*` rules.
-* `ta.vwap` resets at midnight in the selected time zone, not at the futures session open.
 * Speed: roughly 5–7 seconds per 30,000 bars for a large script (about 1,000 lines). Runs
   happen in the background with a progress readout, so the page stays usable.
 

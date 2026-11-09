@@ -1,6 +1,6 @@
 // Browser UI: data loading, Pine editor, chart rendering and the strategy tester.
 import { runScript, SOURCES, timeParts } from '../src/runtime.js';
-import { parseCSV, sampleData, fetchBinance, guessContract } from '../src/data.js';
+import { parseCSV, sampleData, fetchBinance, guessContract, TIMEFRAMES, barSeconds, resample, SESSIONS } from '../src/data.js';
 import { EXAMPLES } from '../src/examples.js';
 
 const LW = window.LightweightCharts;
@@ -25,6 +25,11 @@ const state = {
   // contract specs: point value (currency per 1.0 price move per contract) and tick size (null = detect)
   spec: { pointvalue: 1, mintick: null, root: '' },
   tz: store.get('tz', 'UTC'),
+  base: null, // bars as loaded, before any timeframe change
+  baseLabel: '',
+  tfSel: store.get('tf', 'native'),
+  session: SESSIONS.crypto, // where higher-timeframe bars start (see SESSIONS)
+  server: false, // local server with the market-data endpoint is running
 };
 
 // ------------------------------------------------------------ formatting
@@ -156,27 +161,77 @@ $('examples').addEventListener('change', (e) => {
 });
 
 // ----------------------------------------------------------------- data
-function setSourceUI() {
+function setSourceUI(load = true) {
   const src = $('dataSource').value;
   const ex = src === 'binance';
-  $('symbol').hidden = !ex;
-  $('interval').hidden = !ex;
+  const market = src === 'market';
+  store.set('source', src);
+  $('symbol').hidden = !(ex || market);
   $('barCount').hidden = !ex;
-  $('loadData').hidden = !ex;
+  $('loadData').hidden = !(ex || market);
   $('csvLabel').hidden = src !== 'csv';
+  if (market && /USDT$/.test($('symbol').value)) $('symbol').value = store.get('marketSymbol', 'MNQ1!');
+  if (ex && !/USDT$/.test($('symbol').value)) $('symbol').value = 'BTCUSDT';
+  if (!load) return;
   if (src === 'sample') loadSample();
+  if (market) loadMarket();
 }
 $('dataSource').addEventListener('change', setSourceUI);
-function setData(d, label, symbol, specName) {
+function setData(d, label, symbol, specName, kind) {
   const c = guessContract(specName || symbol);
   state.spec = c ? { pointvalue: c.pointvalue, mintick: c.mintick, root: c.root } : { pointvalue: 1, mintick: null, root: '' };
+  // anchor higher-timeframe bars to the market's session open, like TradingView
+  const k = c ? 'futures' : kind;
+  state.session = SESSIONS[k] || { tz: state.tz, start: 0 };
+  state.base = d;
+  state.baseLabel = label;
+  state.symbol = symbol;
+  applyTimeframe();
+}
+
+// ---- chart timeframe: build higher-timeframe bars from the loaded ones
+const tfLabel = (secs) => (TIMEFRAMES.find((t) => t[2] === secs) || [])[1] || (secs % 86400 === 0 ? `${secs / 86400}D` : secs % 3600 === 0 ? `${secs / 3600}h` : `${Math.round(secs / 60)}m`);
+function fillTimeframeOptions() {
+  const sel = $('timeframe');
+  const baseSecs = state.base ? barSeconds(state.base) : 0;
+  sel.innerHTML = `<option value="native">${state.base ? `As loaded (${tfLabel(baseSecs)})` : 'As loaded'}</option>` +
+    TIMEFRAMES.map(([v, label, secs]) => {
+      const market = $('dataSource').value === 'market'; // market data is re-downloaded per timeframe
+      const tooFine = !market && state.base && secs < baseSecs;
+      const uneven = !market && state.base && secs % baseSecs !== 0 && secs !== 86400;
+      return `<option value="${v}"${tooFine || uneven ? ' disabled' : ''}>${label}${tooFine ? ' (needs finer data)' : ''}</option>`;
+    }).join('');
+  sel.value = state.tfSel;
+  if (sel.value !== state.tfSel || sel.selectedOptions[0]?.disabled) sel.value = 'native';
+}
+function applyTimeframe() {
+  if (!state.base) return;
+  fillTimeframeOptions();
+  const sel = $('timeframe').value;
+  const baseSecs = barSeconds(state.base);
+  const tf = TIMEFRAMES.find((t) => t[0] === sel);
+  const d = tf && tf[2] > baseSecs ? resample(state.base, tf[2], state.session) : state.base;
   const keep = state.data && state.data.time.length === d.time.length && state.data.time[0] === d.time[0];
   state.keepRange = keep && state.chart ? state.chart.timeScale().getVisibleLogicalRange() : null;
   state.data = d;
-  state.dataLabel = label;
-  state.symbol = symbol;
+  state.dataLabel = `${state.baseLabel}${tf && tf[2] > baseSecs ? ` → ${tf[1]}` : ''}`;
   showDataInfo();
 }
+$('timeframe').addEventListener('change', () => {
+  state.tfSel = $('timeframe').value;
+  store.set('tf', state.tfSel);
+  if ($('dataSource').value === 'binance' && state.tfSel !== 'native') {
+    $('loadData').click(); // fetch that interval directly from the exchange
+    return;
+  }
+  if ($('dataSource').value === 'market') {
+    loadMarket();
+    return;
+  }
+  applyTimeframe();
+  run();
+});
+fillTimeframeOptions();
 function showDataInfo() {
   const d = state.data;
   if (!d) return;
@@ -188,21 +243,56 @@ if ($('tz').value !== state.tz) { state.tz = 'UTC'; $('tz').value = 'UTC'; }
 $('tz').addEventListener('change', () => {
   state.tz = $('tz').value;
   store.set('tz', state.tz);
-  showDataInfo();
+  applyTimeframe();
   run();
 });
 function loadSample() {
-  setData(sampleData(1500), 'Sample data (4h)', 'SAMPLE');
+  setData(sampleData(6000, 3600000), 'Sample data', 'SAMPLE', '', 'crypto');
   run();
 }
+// ---- market data from the local server (Yahoo Finance history, as far back as it serves)
+// Yahoo interval to download for each chart timeframe; others are built from these.
+const MARKET_BASE = { 1: '1m', 3: '1m', 5: '5m', 15: '15m', 30: '30m', 45: '15m', 60: '60m', 120: '60m', 180: '60m', 240: '60m', D: '1d' };
+let marketReq = 0;
+async function loadMarket() {
+  const sym = ($('symbol').value.trim() || 'MNQ1!').toUpperCase();
+  $('symbol').value = sym;
+  store.set('marketSymbol', sym);
+  if (!state.server) {
+    setStatus('Market data needs the local server: in a terminal, go to the pine-backtester folder and run  node serve.mjs  then open http://localhost:8080', true);
+    return;
+  }
+  if (state.tfSel === 'native') { state.tfSel = '1'; store.set('tf', '1'); }
+  const iv = MARKET_BASE[state.tfSel] || '1m';
+  const id = ++marketReq;
+  setStatus(`Downloading ${sym} ${iv} history…`);
+  try {
+    const r = await fetch(`/api/history?symbol=${encodeURIComponent(sym)}&interval=${iv}`);
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    if (id !== marketReq) return; // a newer request replaced this one
+    const kind = /=F$/.test(j.yahooSymbol) ? 'futures' : /-USD$/.test(j.yahooSymbol) ? 'crypto' : 'stocks';
+    const d = { time: j.time, open: j.open, high: j.high, low: j.low, close: j.close, volume: j.volume };
+    setData(d, `${sym}${j.name && j.name !== j.yahooSymbol ? ` (${j.name})` : ''} · ${iv} data`, sym, sym, kind);
+    run();
+  } catch (e) {
+    if (id === marketReq) setStatus(`Could not download ${sym}: ${e.message}. Check the symbol (examples: MNQ1!, ES1!, NQ1!, AAPL, SPY, BTCUSD).`, true);
+  }
+}
+$('symbol').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loadData').click(); });
+
 $('loadData').addEventListener('click', async () => {
+  if ($('dataSource').value === 'market') { loadMarket(); return; }
   const sym = $('symbol').value.trim().toUpperCase();
-  const iv = $('interval').value;
+  // the exchange serves these intervals directly; 45m and 3h are built from 15m / 1h bars
+  const sel = state.tfSel === 'native' ? '60' : state.tfSel;
+  const direct = { 1: '1m', 3: '3m', 5: '5m', 15: '15m', 30: '30m', 60: '1h', 120: '2h', 240: '4h', D: '1d' };
+  const iv = direct[sel] || (sel === '45' ? '15m' : '1h');
   const n = Math.max(100, Math.min(20000, +$('barCount').value || 3000));
   setStatus(`Loading ${sym} ${iv}…`);
   try {
     const d = await fetchBinance(sym, iv, n);
-    setData(d, `${sym} · ${iv}`, sym);
+    setData(d, `${sym} · ${iv}`, sym, sym, 'crypto');
     run();
   } catch (e) {
     setStatus(`Could not load ${sym} from the exchange (${e.message}). If you're offline or the page blocks outside requests, export the chart data to CSV and open it with "CSV file".`, true);
@@ -248,6 +338,7 @@ function runOptions() {
     pointvalue: state.spec.pointvalue,
     mintick: state.spec.mintick || undefined,
     timezone: state.tz,
+    session: state.session,
   };
 }
 function showError(message, line) {
@@ -487,7 +578,6 @@ document.querySelectorAll('.tester .tabs button').forEach((b) => b.addEventListe
   for (const t of ['overview', 'performance', 'trades', 'properties']) $(`tab-${t}`).hidden = t !== b.dataset.tab;
   if (b.dataset.tab === 'overview' && state.result) renderEquity(state.result);
 }));
-$('showBH').addEventListener('change', () => state.result && renderEquity(state.result));
 
 function renderTester(res) {
   const s = res.strategy;
@@ -516,33 +606,177 @@ function renderTester(res) {
   renderProperties(s.config, res);
 }
 
+// ---- Overview chart: equity by trade (or by bar), drawdown hanging from the top,
+// per-trade run-up / drawdown bars and buy & hold, in currency or percent.
+const eqPrefs = {
+  equity: store.get('eq.equity', true),
+  drawdown: store.get('eq.drawdown', true),
+  excursions: store.get('eq.excursions', false),
+  buyhold: store.get('eq.buyhold', false),
+  mode: store.get('eq.mode', 'abs'),
+  axis: store.get('eq.axis', 'trades'),
+};
+function syncEqControls() {
+  $('eqEquity').checked = eqPrefs.equity;
+  $('eqDrawdown').checked = eqPrefs.drawdown;
+  $('eqExcursions').checked = eqPrefs.excursions;
+  $('eqBuyHold').checked = eqPrefs.buyhold;
+  document.querySelectorAll('[data-eqmode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.eqmode === eqPrefs.mode)));
+  document.querySelectorAll('[data-eqaxis]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.eqaxis === eqPrefs.axis)));
+}
+for (const [id, key] of [['eqEquity', 'equity'], ['eqDrawdown', 'drawdown'], ['eqExcursions', 'excursions'], ['eqBuyHold', 'buyhold']]) {
+  $(id).addEventListener('change', () => {
+    eqPrefs[key] = $(id).checked;
+    store.set(`eq.${key}`, eqPrefs[key]);
+    if (state.result) renderEquity(state.result);
+  });
+}
+document.querySelectorAll('[data-eqmode]').forEach((b) => b.addEventListener('click', () => {
+  eqPrefs.mode = b.dataset.eqmode;
+  store.set('eq.mode', eqPrefs.mode);
+  syncEqControls();
+  if (state.result) renderEquity(state.result);
+}));
+document.querySelectorAll('[data-eqaxis]').forEach((b) => b.addEventListener('click', () => {
+  eqPrefs.axis = b.dataset.eqaxis;
+  store.set('eq.axis', eqPrefs.axis);
+  syncEqControls();
+  if (state.result) renderEquity(state.result);
+}));
+syncEqControls();
+
+// Points of the overview chart. "trades": one point per closed trade (point 0 = start).
+// "time": one point per bar.
+function equityPoints(res) {
+  const s = res.strategy;
+  const d = state.data;
+  const init = s.metrics.initialCapital;
+  const p0 = d.open[0];
+  const pts = [];
+  if (eqPrefs.axis === 'trades') {
+    pts.push({ label: 'Start', bar: 0, equity: init, trade: null });
+    for (const t of s.trades) pts.push({ label: `#${t.num}`, bar: t.exitBar, equity: init + t.cumProfit, trade: t });
+  } else {
+    let lastTrade = 0;
+    for (let i = 0; i < d.time.length; i++) {
+      let trade = null;
+      while (lastTrade < s.trades.length && s.trades[lastTrade].exitBar === i) trade = s.trades[lastTrade++];
+      pts.push({ label: fmtTime(d.time[i]), bar: i, equity: s.equity[i], trade });
+    }
+  }
+  let peak = -Infinity;
+  for (const p of pts) {
+    if (Number.isFinite(p.equity)) peak = Math.max(peak, p.equity);
+    p.dd = Number.isFinite(p.equity) ? peak - p.equity : NaN;
+    p.ddPct = peak > 0 ? (p.dd / peak) * 100 : NaN;
+    p.bh = init * (d.close[p.bar] / p0);
+  }
+  return { pts, init };
+}
+
 function renderEquity(res) {
   const s = res.strategy;
   if (!s) return;
-  const d = state.data;
   const th = chartTheme();
   if (state.eqChart) state.eqChart.remove();
-  const intraday = d.time.length > 1 && d.time[1] - d.time[0] < 86400000;
-  const opts = baseChartOptions(th, intraday);
+  const byTrade = eqPrefs.axis === 'trades';
+  const pct = eqPrefs.mode === 'pct';
+  const { pts, init } = equityPoints(res);
+  const intraday = state.data.time.length > 1 && state.data.time[1] - state.data.time[0] < 86400000;
+  const opts = baseChartOptions(th, intraday && !byTrade);
   opts.layout.attributionLogo = false;
-  opts.rightPriceScale.scaleMargins = { top: 0.15, bottom: 0.05 };
+  opts.handleScale = { mouseWheel: true, pinch: true, axisPressedMouseMove: true };
+  // Trade axis: the chart library only knows time, so trade k sits at day k and its labels show the trade number.
+  const DAY = 86400;
+  const xs = byTrade ? pts.map((_, k) => (k + 1) * DAY) : state.data.time.map(chartTime);
+  if (byTrade) {
+    opts.timeScale.tickMarkFormatter = (t) => String(Math.round(t / DAY) - 1);
+    opts.localization = { timeFormatter: (t) => { const k = Math.round(t / DAY) - 1; return k === 0 ? 'Start' : `Trade #${k}`; } };
+    opts.timeScale.rightOffset = 2;
+  }
+  const money = (v) => `${v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`;
+  const pctFmt = (v) => `${v.toFixed(2)}%`;
+  const fmtVal = pct ? pctFmt : money;
+  opts.localization = { ...(opts.localization || {}), priceFormatter: fmtVal };
   const ch = LW.createChart($('equityChart'), opts);
   state.eqChart = ch;
-  const init = s.metrics.initialCapital;
-  const eq = ch.addSeries(LW.BaselineSeries, {
-    baseValue: { type: 'price', price: init },
-    topLineColor: th.up, topFillColor1: withAlpha(th.up, 0.28), topFillColor2: withAlpha(th.up, 0.04),
-    bottomLineColor: th.down, bottomFillColor1: withAlpha(th.down, 0.04), bottomFillColor2: withAlpha(th.down, 0.28),
-    lineWidth: 2, priceLineVisible: false, title: 'Equity',
-  });
-  const times = d.time.map(chartTime);
-  eq.setData(times.map((t, i) => (Number.isFinite(s.equity[i]) ? { time: t, value: s.equity[i] } : { time: t })));
-  if ($('showBH').checked) {
-    const bh = ch.addSeries(LW.LineSeries, { color: withAlpha(th.fg, 0.7), lineWidth: 1, lineStyle: 2, priceLineVisible: false, title: 'Buy & hold' });
-    const p0 = d.open[0];
-    bh.setData(times.map((t, i) => ({ time: t, value: init * (d.close[i] / p0) })));
+
+  const toVal = (equity) => (pct ? (equity / init - 1) * 100 : equity);
+  const showEx = eqPrefs.excursions;
+  const mainMargins = { top: 0.12, bottom: showEx ? 0.3 : 0.06 };
+
+  let eqSeries = null;
+  if (eqPrefs.equity) {
+    eqSeries = ch.addSeries(LW.BaselineSeries, {
+      baseValue: { type: 'price', price: pct ? 0 : init },
+      topLineColor: th.up, topFillColor1: withAlpha(th.up, 0.32), topFillColor2: withAlpha(th.up, 0.05),
+      bottomLineColor: th.down, bottomFillColor1: withAlpha(th.down, 0.05), bottomFillColor2: withAlpha(th.down, 0.32),
+      lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: 'Equity',
+      pointMarkersVisible: byTrade && pts.length <= 60, pointMarkersRadius: 2.5,
+    });
+    eqSeries.priceScale().applyOptions({ scaleMargins: mainMargins });
+    eqSeries.setData(pts.map((p, k) => (Number.isFinite(p.equity) ? { time: xs[k], value: toVal(p.equity) } : { time: xs[k] })));
+    eqSeries.createPriceLine({ price: pct ? 0 : init, color: withAlpha(th.fg, 0.5), lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
+  }
+  if (eqPrefs.buyhold) {
+    const bh = ch.addSeries(LW.LineSeries, {
+      color: withAlpha(th.fg, 0.75), lineWidth: 1, lineStyle: 0, priceLineVisible: false, title: 'Buy & hold',
+      priceScaleId: eqPrefs.equity ? 'right' : 'right',
+    });
+    bh.priceScale().applyOptions({ scaleMargins: mainMargins });
+    bh.setData(pts.map((p, k) => ({ time: xs[k], value: toVal(p.bh) })));
+  }
+  if (eqPrefs.drawdown) {
+    // hangs from the top of the pane on its own inverted scale
+    const dd = ch.addSeries(LW.HistogramSeries, {
+      priceScaleId: 'dd', color: withAlpha(th.down, 0.28), priceLineVisible: false, lastValueVisible: false, base: 0,
+      priceFormat: { type: 'custom', formatter: (v) => `−${fmtVal(Math.abs(v))}` },
+    });
+    dd.priceScale().applyOptions({ invertScale: true, scaleMargins: { top: 0, bottom: 0.7 }, visible: false });
+    dd.setData(pts.map((p, k) => ({ time: xs[k], value: (pct ? p.ddPct : p.dd) || 0 })));
+  }
+  if (showEx) {
+    // per-trade best (run-up) and worst (drawdown) open profit, at the trade's exit
+    const exOpts = { priceScaleId: 'ex', priceLineVisible: false, lastValueVisible: false, base: 0 };
+    const up = ch.addSeries(LW.HistogramSeries, { ...exOpts, color: withAlpha(th.up, 0.8) });
+    const dn = ch.addSeries(LW.HistogramSeries, { ...exOpts, color: withAlpha(th.down, 0.8) });
+    up.priceScale().applyOptions({ scaleMargins: { top: 0.76, bottom: 0.02 }, visible: false });
+    const rel = (v, t) => (pct ? (t.entryValue ? (v / t.entryValue) * 100 : NaN) : v);
+    const upData = [];
+    const dnData = [];
+    pts.forEach((p, k) => {
+      if (!p.trade) { upData.push({ time: xs[k] }); dnData.push({ time: xs[k] }); return; }
+      upData.push({ time: xs[k], value: rel(p.trade.runup, p.trade) || 0 });
+      dnData.push({ time: xs[k], value: -(rel(p.trade.drawdown, p.trade) || 0) });
+    });
+    up.setData(upData);
+    dn.setData(dnData);
   }
   ch.timeScale().fitContent();
+
+  // hover readout
+  const legend = $('equityLegend');
+  const show = (k) => {
+    if (k === undefined || k < 0 || k >= pts.length) k = pts.length - 1;
+    const p = pts[k];
+    const parts = [`<b>${esc(byTrade ? (k === 0 ? 'Start' : `Trade #${k}`) : p.label)}</b>`];
+    if (Number.isFinite(p.equity)) {
+      const net = p.equity - init;
+      parts.push(`Equity <span class="${signCls(net)}">${esc(pct ? pctFmt(toVal(p.equity)) : money(p.equity))}</span>`);
+    }
+    if (eqPrefs.drawdown && Number.isFinite(p.dd)) parts.push(`Drawdown <span class="${p.dd > 0 ? 'neg' : ''}">${esc(pct ? pctFmt(-p.ddPct || 0) : money(-p.dd))}</span>`);
+    if (p.trade) {
+      const t = p.trade;
+      parts.push(`P&L <span class="${signCls(t.profit)}">${esc(pct ? pctFmt(t.profitPct) : money(t.profit))}</span>`);
+      if (eqPrefs.excursions) parts.push(`Run-up ${esc(money(t.runup))} · Trade DD ${esc(money(-t.drawdown))}`);
+      if (byTrade) parts.push(esc(`${t.dir > 0 ? 'Long' : 'Short'} ${fmtTime(t.exitTime)}`));
+    }
+    if (eqPrefs.buyhold) parts.push(`Buy & hold ${esc(pct ? pctFmt(toVal(p.bh)) : money(p.bh))}`);
+    legend.innerHTML = parts.map((x) => `<span>${x}</span>`).join('');
+  };
+  show();
+  ch.subscribeCrosshairMove((param) => show(param && param.logical !== undefined ? Math.round(param.logical) : undefined));
+  if (byTrade && pts.length === 1) legend.innerHTML = '<span>No closed trades yet.</span>';
 }
 
 function renderPerformance(m) {
@@ -756,4 +990,19 @@ new MutationObserver(rerender).observe(document.documentElement, { attributes: t
 // ----------------------------------------------------------------- boot
 code.value = store.get('code', EXAMPLES[0].code);
 refreshEditor();
-setSourceUI();
+// Boot: use downloaded market data when the local server is running, else the offline sample.
+(async () => {
+  try {
+    const r = await fetch('/api/ping', { cache: 'no-store' });
+    state.server = r.ok && (await r.json()).ok === true;
+  } catch { state.server = false; }
+  const marketOpt = document.querySelector('#dataSource option[value="market"]');
+  if (marketOpt && !state.server) marketOpt.textContent = 'Market data (run node serve.mjs)';
+  const saved = store.get('source', state.server ? 'market' : 'sample');
+  const want = saved === 'market' && !state.server ? 'sample' : saved;
+  $('dataSource').value = [...$('dataSource').options].some((o) => o.value === want) ? want : 'sample';
+  if ($('dataSource').value === 'csv' || $('dataSource').value === 'binance') {
+    setSourceUI(false);
+    loadSample(); // nothing to show until a file is opened / Load is pressed
+  } else setSourceUI();
+})();

@@ -419,3 +419,23 @@ test('display.data_window plots are kept out of the chart list but still compute
   assert.equal(res.plots[0].display, 'display.data_window');
   assert.deepEqual(res.plots[0].values, [1, 2]);
 });
+
+test('futures higher-timeframe bars start at the 18:00 New York session open', async () => {
+  const { resample, SESSIONS } = await import('../src/data.js');
+  const { timeParts } = await import('../src/runtime.js');
+  // 1-minute bars from Sunday 18:00 New York (22:00 UTC in November) for 30 hours
+  const d = { time: [], open: [], high: [], low: [], close: [], volume: [] };
+  const t0 = Date.UTC(2026, 10, 8, 23, 0); // 18:00 EST
+  for (let i = 0; i < 30 * 60; i++) {
+    d.time.push(t0 + i * 60000); d.open.push(100); d.high.push(101); d.low.push(99); d.close.push(100); d.volume.push(1);
+  }
+  const hhmm = (t) => { const p = timeParts(t, 'America/New_York'); return `${p.h}:${String(p.mi).padStart(2, '0')}`; };
+  assert.deepEqual(resample(d, 14400, SESSIONS.futures).time.map(hhmm), ['18:00', '22:00', '2:00', '6:00', '10:00', '14:00', '18:00', '22:00']);
+  assert.deepEqual(resample(d, 86400, SESSIONS.futures).time.map(hhmm), ['18:00', '18:00']);
+  // the same data with request.security(..., "D") inside a script
+  const res = runScript('indicator("t")\nplot(request.security(syminfo.tickerid, "D", bar_index, lookahead=barmerge.lookahead_on), "d")', d, { session: SESSIONS.futures });
+  const v = plot(res, 'd');
+  assert.equal(v[0], 0);
+  assert.equal(v[24 * 60 - 1], 0); // 17:59 next day still in the first session
+  assert.equal(v[24 * 60], 1); // 18:00 starts the next trading day
+});

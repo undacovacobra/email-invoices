@@ -17,18 +17,21 @@
     <div class="ctl">
       <label for="dataSource">Data</label>
       <select id="dataSource" class="field">
+        <option value="market">Market data</option>
         <option value="sample">Sample (offline)</option>
         <option value="binance">Crypto exchange</option>
         <option value="csv">CSV file</option>
       </select>
-      <input id="symbol" class="field" value="BTCUSDT" aria-label="Symbol" hidden>
-      <select id="interval" class="field" aria-label="Interval" hidden>
-        <option>1m</option><option>5m</option><option>15m</option><option>30m</option>
-        <option>1h</option><option selected>4h</option><option>1d</option><option>1w</option>
-      </select>
+      <input id="symbol" class="field" value="MNQ1!" aria-label="Symbol" placeholder="MNQ1!, ES1!, AAPL, BTCUSD" title="Futures like MNQ1! or ES1!, stocks like AAPL, crypto like BTCUSD" hidden>
       <input id="barCount" class="field" type="number" min="100" max="20000" step="100" value="3000" aria-label="Number of bars" hidden>
       <button id="loadData" class="btn" hidden>Load</button>
       <label class="btn file-btn" id="csvLabel" hidden>Open CSV…<input type="file" id="csvFile" accept=".csv,.txt,text/csv"></label>
+    </div>
+    <div class="ctl">
+      <label for="timeframe">Timeframe</label>
+      <select id="timeframe" class="field" title="Chart timeframe. Higher timeframes are built from the loaded bars.">
+        <option value="native">As loaded</option>
+      </select>
     </div>
     <div class="ctl">
       <label for="tz">Time</label>
@@ -82,11 +85,24 @@
       </nav>
       <div id="tab-overview" class="tab-body">
         <div id="stats" class="stats"></div>
+        <div id="equityLegend" class="eq-legend"></div>
         <div class="equity-wrap">
-          <div class="equity-opts">
-            <label><input type="checkbox" id="showBH" checked> Buy &amp; hold</label>
-          </div>
           <div id="equityChart"></div>
+        </div>
+        <div class="equity-opts">
+          <label><input type="checkbox" id="eqEquity" checked><i class="sw sw-eq"></i>Equity</label>
+          <label><input type="checkbox" id="eqDrawdown" checked><i class="sw sw-dd"></i>Drawdown</label>
+          <label><input type="checkbox" id="eqExcursions"><i class="sw sw-ex"></i>Trade run-up / drawdown</label>
+          <label><input type="checkbox" id="eqBuyHold"><i class="sw sw-bh"></i>Buy &amp; hold equity</label>
+          <span class="spacer"></span>
+          <div class="seg" role="group" aria-label="Values">
+            <button type="button" data-eqmode="abs" aria-pressed="true">Absolute</button>
+            <button type="button" data-eqmode="pct" aria-pressed="false">Percentage</button>
+          </div>
+          <div class="seg" role="group" aria-label="Horizontal axis">
+            <button type="button" data-eqaxis="trades" aria-pressed="true">By trade</button>
+            <button type="button" data-eqaxis="time" aria-pressed="false">By time</button>
+          </div>
         </div>
       </div>
       <div id="tab-performance" class="tab-body" hidden></div>

@@ -211,6 +211,7 @@ export class Broker {
       entryBar: t.entryBar, exitBar: bar,
       entryTime: t.entryTime, exitTime: this.data.time[bar],
       entryComment: t.entryComment, exitComment: comment,
+      entryValue: t.entryPrice * qty * this.pv,
       profit, profitPct: (profit / (t.entryPrice * qty * this.pv)) * 100,
       commission: entryComm + exitComm,
       runup: t.maxFav * share, drawdown: t.maxAdv * share,
