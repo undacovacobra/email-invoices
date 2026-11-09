@@ -110,3 +110,22 @@ export async function fetchBinance(symbol, interval, bars = 3000) {
   }
   return fromRows(rows);
 }
+
+// Futures contract specs: currency per 1.0 point per contract, and tick size.
+// Matched against the symbol or file name (e.g. "CME_MINI_MNQ1!, 1.csv").
+const CONTRACTS = [
+  ['MNQ', 2, 0.25], ['NQ', 20, 0.25], ['MES', 5, 0.25], ['ES', 50, 0.25], ['MYM', 0.5, 1], ['YM', 5, 1],
+  ['M2K', 5, 0.1], ['RTY', 50, 0.1], ['MGC', 10, 0.1], ['GC', 100, 0.1], ['SIL', 1000, 0.005], ['SI', 5000, 0.005],
+  ['MCL', 100, 0.01], ['CL', 1000, 0.01], ['NG', 10000, 0.001], ['ZB', 1000, 1 / 32], ['ZN', 1000, 1 / 64],
+  ['6E', 125000, 0.00005], ['M6E', 12500, 0.0001], ['MBT', 0.1, 5], ['BTC', 5, 5], ['MET', 0.1, 0.5],
+];
+export function guessContract(name) {
+  const s = String(name || '').toUpperCase();
+  for (const [root, pointvalue, mintick] of CONTRACTS) {
+    // root followed by a month code + year (MNQZ2026, NQH6), a continuous "1!" suffix, or end of name
+    if (new RegExp(`(^|[^A-Z0-9])${root}([FGHJKMNQUVXZ]\\d{1,4}|\\d!|!|$|[^A-Z0-9])`).test(s)) {
+      return { root, pointvalue, mintick };
+    }
+  }
+  return null;
+}

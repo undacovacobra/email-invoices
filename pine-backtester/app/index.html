@@ -30,6 +30,18 @@
       <button id="loadData" class="btn" hidden>Load</button>
       <label class="btn file-btn" id="csvLabel" hidden>Open CSV…<input type="file" id="csvFile" accept=".csv,.txt,text/csv"></label>
     </div>
+    <div class="ctl">
+      <label for="tz">Time</label>
+      <select id="tz" class="field" title="Time zone for the chart, the trade list and the script's default time zone">
+        <option value="UTC">UTC</option>
+        <option value="America/New_York">New York</option>
+        <option value="America/Chicago">Chicago</option>
+        <option value="Europe/London">London</option>
+        <option value="Europe/Berlin">Frankfurt</option>
+        <option value="Asia/Tokyo">Tokyo</option>
+        <option value="Australia/Sydney">Sydney</option>
+      </select>
+    </div>
     <span id="dataInfo" class="data-info"></span>
     <span class="spacer"></span>
     <button id="settingsBtn" class="btn" title="Script inputs and strategy properties">Settings</button>

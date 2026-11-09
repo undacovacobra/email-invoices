@@ -29,9 +29,10 @@ const DEFAULTS = {
 let tradeSeq = 0;
 
 export class Broker {
-  constructor(data, mintick, overrides = {}) {
+  constructor(data, mintick, overrides = {}, pointvalue = 1) {
     this.data = data;
     this.mintick = mintick;
+    this.pv = pointvalue; // currency per 1.0 of price per contract (e.g. MNQ = 2)
     this.overrides = overrides;
     this.cfg = { ...DEFAULTS, ...overrides };
     this.orders = []; // pending entry/order (limit/stop) & market orders
@@ -71,7 +72,7 @@ export class Broker {
     return this.open.reduce((s, t) => s + t.qty * t.entryPrice, 0) / q;
   }
   openProfit(price) {
-    return this.open.reduce((s, t) => s + t.dir * (price - t.entryPrice) * t.qty, 0);
+    return this.open.reduce((s, t) => s + t.dir * (price - t.entryPrice) * t.qty * this.pv, 0);
   }
   equityAt(price) {
     return this.cfg.initial_capital + this.realized + this.openProfit(price);
@@ -82,8 +83,8 @@ export class Broker {
     if (qty !== undefined && qty !== null && !Number.isNaN(qty)) return +qty;
     const v = this.cfg.default_qty_value;
     switch (this.cfg.default_qty_type) {
-      case 'cash': return v / price;
-      case 'percent_of_equity': return (this.equityAt(price) * v) / 100 / price;
+      case 'cash': return v / (price * this.pv);
+      case 'percent_of_equity': return (this.equityAt(price) * v) / 100 / (price * this.pv);
       default: return v;
     }
   }
@@ -170,7 +171,7 @@ export class Broker {
     switch (this.cfg.commission_type) {
       case 'cash_per_contract': return qty * v;
       case 'cash_per_order': return v;
-      default: return (qty * price * v) / 100;
+      default: return (qty * price * this.pv * v) / 100;
     }
   }
 
@@ -200,7 +201,7 @@ export class Broker {
     this.commissionPaid += exitComm;
     const share = qty / t.qty;
     const entryComm = t.entryCommission * share;
-    const gross = t.dir * (price - t.entryPrice) * qty;
+    const gross = t.dir * (price - t.entryPrice) * qty * this.pv;
     const profit = gross - entryComm - exitComm;
     this.realized += gross - exitComm - entryComm;
     this.closed.push({
@@ -210,7 +211,7 @@ export class Broker {
       entryBar: t.entryBar, exitBar: bar,
       entryTime: t.entryTime, exitTime: this.data.time[bar],
       entryComment: t.entryComment, exitComment: comment,
-      profit, profitPct: (profit / (t.entryPrice * qty)) * 100,
+      profit, profitPct: (profit / (t.entryPrice * qty * this.pv)) * 100,
       commission: entryComm + exitComm,
       runup: t.maxFav * share, drawdown: t.maxAdv * share,
       cumProfit: this.realized,
@@ -434,8 +435,8 @@ export class Broker {
   trackExcursions(bar) {
     const h = this.data.high[bar], l = this.data.low[bar];
     for (const t of this.open) {
-      const fav = t.dir > 0 ? (h - t.entryPrice) * t.qty : (t.entryPrice - l) * t.qty;
-      const adv = t.dir > 0 ? (t.entryPrice - l) * t.qty : (h - t.entryPrice) * t.qty;
+      const fav = (t.dir > 0 ? h - t.entryPrice : t.entryPrice - l) * t.qty * this.pv;
+      const adv = (t.dir > 0 ? t.entryPrice - l : h - t.entryPrice) * t.qty * this.pv;
       if (fav > t.maxFav) t.maxFav = fav;
       if (adv > t.maxAdv) t.maxAdv = adv;
     }

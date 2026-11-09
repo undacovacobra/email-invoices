@@ -45,6 +45,19 @@ No install needed. Any one of these:
   bars, from a public market-data feed. Local / standalone copy only.
 * **Sample** – a built-in random-walk series so the app works offline.
 
+### Futures (MNQ, NQ, MES, ES, …)
+
+P&L, `syminfo.pointvalue` and `syminfo.mintick` must match the contract or dollar
+targets and profits come out wrong. When the file or symbol name contains a contract
+code (for example TradingView's export name `CME_MINI_MNQ1!, 1.csv`) the point value
+and tick size are filled in automatically: MNQ $2/pt and 0.25 tick, NQ $20, MES $5,
+ES $50, M2K/RTY, MYM/YM, MGC/GC, MCL/CL and more. Check or change them in
+**Settings → Properties → Symbol** (CLI: `--pointvalue 2 --mintick 0.25`).
+
+Pick the **Time** zone your TradingView chart uses (for CME futures that's usually New
+York or Chicago) so trade times line up with TradingView's List of Trades. The script's
+own `hour(time, "America/New_York")`-style calls always use the zone they name.
+
 ## How fills are simulated
 
 The broker emulator follows the rules TradingView documents for its Strategy Tester:
@@ -68,7 +81,8 @@ win rate, average/largest trades, bars in trade, commission, open P&L.
 
 ## Supported Pine Script
 
-* Syntax: `var`/`varip`, typed declarations, `:=` and `+= -= *= /= %=`, `if / else if /
+* Syntax: `var`/`varip`, typed declarations, user-defined `type`s (`.new()`, `.copy()`,
+  reading and assigning fields), `:=` and `+= -= *= /= %=`, `if / else if /
   else`, `for … to … by`, `for … in`, `while`, `switch`, `break`/`continue`, ternaries,
   user functions (single- and multi-line, default params), tuples `[a, b] = f()`,
   history references `x[n]` on anything, line wrapping, method syntax `arr.push(x)`.
@@ -83,6 +97,9 @@ win rate, average/largest trades, bars in trade, commission, open P&L.
   `.entry_price()`, `.profit()`, … accessors).
 * `input.*` (int, float, bool, string with options, source, time, color, …) – editable in
   **Settings → Inputs**; strategy properties are editable in **Settings → Properties**.
+* `request.security()` on the chart's own symbol at a higher timeframe (bars are built
+  from the chart's data; `lookahead_on` and `lookahead_off` behave as on TradingView's
+  historical bars), `runtime.error()`.
 * `plot` (line, linebr, stepline, histogram, columns, area, circles), `plotshape`,
   `plotchar`, `plotarrow`, `hline`, `bgcolor`, `barcolor`, `color.*`, `math.*`, `str.*`,
   `array.*`, `time`/session filters, `timestamp`, `year/month/…`, `barstate.*`,
@@ -90,12 +107,16 @@ win rate, average/largest trades, bars in trade, commission, open P&L.
 
 ### Not supported (yet)
 
-* `request.security()` / other symbols or timeframes, `import` of libraries, user-defined
-  `type`s, `map`/`matrix`.
+* `request.security()` for other symbols or lower timeframes, `import` of libraries,
+  `map`/`matrix`, methods on user-defined types.
+* Higher-timeframe bars are cut on clock boundaries (UTC, or the selected time zone for
+  daily and above). TradingView cuts futures bars at the exchange session open, so 4h /
+  daily values from `request.security` can differ for futures.
 * Drawings (`label.*`, `line.*`, `box.*`, `table.*`) and `fill()` are accepted but not drawn.
 * Margin calls, bar magnifier, `calc_on_every_tick`/realtime bars, `strategy.risk.*` rules.
-* Times are in UTC unless you pass a timezone (CLI `--tz`); TradingView uses the
-  exchange's timezone, which matters for session filters and daily resets.
+* `ta.vwap` resets at midnight in the selected time zone, not at the futures session open.
+* Speed: roughly 5–7 seconds per 30,000 bars for a large script (about 1,000 lines). Runs
+  happen in the background with a progress readout, so the page stays usable.
 
 ## Development
 

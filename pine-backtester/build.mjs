@@ -11,14 +11,15 @@ const root = dirname(fileURLToPath(import.meta.url));
 const hosted = process.argv.includes('--hosted');
 const read = (p) => readFileSync(join(root, p), 'utf8');
 
-const MODULES = ['src/lexer.js', 'src/parser.js', 'src/ta.js', 'src/broker.js', 'src/metrics.js', 'src/runtime.js', 'src/data.js', 'src/examples.js', 'app/app.js'];
+const ENGINE = ['src/lexer.js', 'src/parser.js', 'src/ta.js', 'src/broker.js', 'src/metrics.js', 'src/runtime.js'];
+const MODULES = [...ENGINE, 'src/data.js', 'src/examples.js', 'app/app.js'];
 const modVar = (p) => `__m_${basename(p, '.js')}`;
 
 function wrap(path) {
   let src = read(path);
   const exported = [];
   src = src.replace(/^import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"];?\s*$/gm, (_, names, from) => {
-    const target = MODULES.find((m) => basename(m) === basename(from));
+    const target = [...MODULES, 'app/worker.js'].find((m) => basename(m) === basename(from));
     if (!target) throw new Error(`${path}: cannot resolve import ${from}`);
     const binds = names.split(',').map((s) => s.trim()).filter(Boolean).map((s) => s.replace(/\s+as\s+/, ': '));
     return `const { ${binds.join(', ')} } = ${modVar(target)};`;
@@ -31,7 +32,9 @@ function wrap(path) {
   return `const ${modVar(path)} = (() => {\n${src}\nreturn { ${exported.join(', ')} };\n})();\n`;
 }
 
-const bundle = MODULES.map(wrap).join('\n');
+// The page bundle, plus the engine + worker entry as a string the page turns into a Web Worker.
+const workerSrc = [...ENGINE, 'app/worker.js'].map(wrap).join('\n');
+const bundle = `window.__PBT_ENGINE__ = ${JSON.stringify(workerSrc)};\n${MODULES.map(wrap).join('\n')}`;
 const html = read('app/index.html');
 let body = html.slice(html.indexOf('<!-- APP:BEGIN -->') + 18, html.indexOf('<!-- APP:END -->'));
 if (hosted) body = body.replace(/\s*<option value="binance">[^<]*<\/option>/, '');

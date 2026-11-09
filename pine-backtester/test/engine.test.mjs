@@ -344,3 +344,78 @@ test('runtime errors point at the offending line', () => {
   assert.throws(() => runScript('indicator("t")\nplot(foo)', d), /line 2: Undeclared identifier 'foo'/);
   assert.throws(() => runScript('indicator("t")\nx = 1\nx := nope(1)', d), /line 3/);
 });
+
+// ------------------------------------------------- user types, security, futures
+test('user-defined types: new, field read/write, na objects, int fields', () => {
+  const d = series([1, 2, 3, 4]);
+  const res = runScript(`indicator("t")
+type Box
+    int   count
+    float level = 5.5
+var Box b = na
+if na(b)
+    b := Box.new(0)
+b.count := b.count + 1
+b.level += 1
+x = b.count / 2
+plot(b.count, "count")
+plot(b.level, "level")
+plot(not na(b) ? 1 : 0, "set")
+`, d);
+  assert.deepEqual(plot(res, 'count'), [1, 2, 3, 4]);
+  assert.deepEqual(plot(res, 'level'), [6.5, 7.5, 8.5, 9.5]);
+  assert.deepEqual(plot(res, 'set'), [1, 1, 1, 1]);
+});
+
+test('int-declared variables truncate like Pine integer division', () => {
+  const res = runScript('indicator("t")\nint a = 7 / 2\nfloat b = 7 / 2\nplot(a, "a")\nplot(b, "b")', series([1]));
+  assert.equal(plot(res, 'a')[0], 3);
+  assert.equal(plot(res, 'b')[0], 3.5);
+});
+
+test('request.security builds higher-timeframe bars from the chart data', () => {
+  // 12 one-hour bars -> 3 four-hour bars
+  const d = { time: [], open: [], high: [], low: [], close: [], volume: [] };
+  for (let i = 0; i < 12; i++) {
+    d.time.push(Date.UTC(2024, 0, 1, i)); d.open.push(i); d.high.push(i + 0.5); d.low.push(i - 0.5); d.close.push(i + 0.25); d.volume.push(1);
+  }
+  const res = runScript(`indicator("t")
+on = request.security(syminfo.tickerid, "240", close, lookahead=barmerge.lookahead_on)
+off = request.security(syminfo.tickerid, "240", close)
+prevHigh = request.security(syminfo.tickerid, "240", high[1], lookahead=barmerge.lookahead_on)
+plot(on, "on")
+plot(off, "off")
+plot(prevHigh, "ph")
+`, d);
+  // lookahead on: every bar sees its own 4h bar's final close
+  assert.deepEqual(plot(res, 'on'), [3.25, 3.25, 3.25, 3.25, 7.25, 7.25, 7.25, 7.25, 11.25, 11.25, 11.25, 11.25]);
+  // lookahead off: the 4h value appears when that 4h bar has closed
+  const off = plot(res, 'off');
+  assert.ok(off.slice(0, 3).every(Number.isNaN));
+  assert.deepEqual(off.slice(3), [3.25, 3.25, 3.25, 3.25, 7.25, 7.25, 7.25, 7.25, 11.25]);
+  // the usual non-repainting pattern: previous completed 4h bar
+  assert.ok(plot(res, 'ph').slice(0, 4).every(Number.isNaN));
+  assert.deepEqual(plot(res, 'ph').slice(4), [3.5, 3.5, 3.5, 3.5, 7.5, 7.5, 7.5, 7.5]);
+});
+
+test('futures point value scales P&L; tick size is detected from the prices', async () => {
+  const { guessContract } = await import('../src/data.js');
+  assert.deepEqual(guessContract('CME_MINI_MNQ1!, 1.csv'), { root: 'MNQ', pointvalue: 2, mintick: 0.25 });
+  assert.equal(guessContract('MESZ2026.csv').root, 'MES');
+  assert.equal(guessContract('BTCUSDT_1h.csv'), null);
+  const d = bars([[100, 100, 100, 100], [100, 100, 100, 100], [100.25, 110.5, 100, 110.75], [110.75, 111, 110, 110.5]]);
+  const res = runScript(`strategy("t")
+if bar_index == 0
+    strategy.entry("L", strategy.long, qty=3)
+if bar_index == 2
+    strategy.close("L")
+`, d, { pointvalue: 2 });
+  assert.equal(res.mintick, 0.25);
+  assert.equal(res.strategy.trades[0].profit, (110.75 - 100) * 3 * 2); // closed at the next bar's open
+});
+
+test('display.data_window plots are kept out of the chart list but still computed', () => {
+  const res = runScript('indicator("t", overlay=true)\nplot(close, "c", display=display.data_window)', series([1, 2]));
+  assert.equal(res.plots[0].display, 'display.data_window');
+  assert.deepEqual(res.plots[0].values, [1, 2]);
+});

@@ -1,6 +1,7 @@
 // Pine Script parser: tokens -> AST.
 import { tokenize, PineSyntaxError } from './lexer.js';
 
+const ASSIGN_OPS = [':=', '+=', '-=', '*=', '/=', '%='];
 const TYPE_NAMES = new Set([
   'int', 'float', 'bool', 'string', 'color', 'line', 'label', 'box', 'table',
   'linefill', 'polyline', 'array', 'matrix', 'map', 'series', 'simple', 'const',
@@ -15,7 +16,9 @@ class Parser {
     this.t = tokens;
     this.i = 0;
     this.nextId = 1;
+    this.userTypes = new Set();
   }
+  isTypeName(v) { return TYPE_NAMES.has(v) || this.userTypes.has(v); }
 
   // ---- helpers ----------------------------------------------------------
   peek(o = 0) { return this.t[this.i + o]; }
@@ -89,7 +92,7 @@ class Parser {
         case 'method': this.next(); return this.parseStatement();
         case 'import': this.fail('import of libraries is not supported');
         // eslint-disable-next-line no-fallthrough
-        case 'type': this.fail('user-defined types are not supported yet');
+        case 'type': return this.parseTypeDef();
         default: break;
       }
     }
@@ -97,8 +100,12 @@ class Parser {
     if (tk.type === 'ident') {
       if (this.atOp('(', 1) && this.isFuncDef()) return this.parseFuncDef();
       if (this.isTypedDecl() || this.atOp('=', 1)) return this.parseDecl();
-      if (this.at('op', undefined, 1) && [':=', '+=', '-=', '*=', '/=', '%='].includes(this.peek(1).value)) {
-        const name = this.next().value;
+      // x := v   and   obj.field := v  (also +=, -=, ...)
+      let j = 1;
+      while (this.atOp('.', j) && (this.at('ident', undefined, j + 1) || this.at('kw', undefined, j + 1))) j += 2;
+      if (this.at('op', undefined, j) && ASSIGN_OPS.includes(this.peek(j).value)) {
+        let name = '';
+        for (let k = 0; k < j; k++) name += this.next().value;
         const op = this.next().value;
         const value = this.parseRhs();
         return this.node('Assign', tk, { name, op, value });
@@ -145,7 +152,7 @@ class Parser {
   isTypedDecl() {
     let j = this.i;
     const tk = () => this.t[j];
-    if (tk().type !== 'ident' || !TYPE_NAMES.has(tk().value)) return false;
+    if (tk().type !== 'ident' || !this.isTypeName(tk().value)) return false;
     if (['series', 'simple', 'const'].includes(tk().value) && this.t[j + 1].type === 'ident') j++;
     j++;
     if (this.t[j].type === 'op' && this.t[j].value === '<') {
@@ -169,8 +176,31 @@ class Parser {
     return type;
   }
   isTypeStart() {
-    return this.at('ident') && TYPE_NAMES.has(this.peek().value) &&
+    return this.at('ident') && this.isTypeName(this.peek().value) &&
       (this.at('ident', undefined, 1) || this.atOp('<', 1) || (this.atOp('[', 1) && this.atOp(']', 2)));
+  }
+
+  // type Name
+  //     float field = default
+  parseTypeDef() {
+    const tk = this.expect('kw', 'type');
+    const name = this.expect('ident').value;
+    this.userTypes.add(name);
+    this.expect('newline');
+    this.expect('indent');
+    const fields = [];
+    while (!this.at('dedent') && !this.at('eof')) {
+      if (this.at('newline')) { this.next(); continue; }
+      if (this.atKw('varip')) this.next();
+      const ftype = this.skipType();
+      const fname = this.expect('ident').value;
+      let def = null;
+      if (this.atOp('=')) { this.next(); def = this.parseExpression(); }
+      this.endStatement();
+      fields.push({ name: fname, type: ftype, def });
+    }
+    if (this.at('dedent')) this.next();
+    return this.node('TypeDef', tk, { name, fields });
   }
 
   parseDecl() {

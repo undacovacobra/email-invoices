@@ -19,15 +19,17 @@ const BREAK = new BreakSignal();
 const CONTINUE = new ContinueSignal();
 
 class Scope {
-  constructor(parent) { this.parent = parent; this.vars = new Map(); }
+  constructor(parent) { this.parent = parent; this.vars = null; }
   lookup(name) {
     for (let s = this; s; s = s.parent) {
-      const v = s.vars.get(name);
-      if (v) return v;
+      if (s.vars) {
+        const v = s.vars.get(name);
+        if (v) return v;
+      }
     }
     return null;
   }
-  set(name, slot) { this.vars.set(name, slot); }
+  set(name, slot) { (this.vars || (this.vars = new Map())).set(name, slot); }
 }
 
 // ---------------------------------------------------------------- colors
@@ -51,13 +53,37 @@ function makeColor(r, g, b, transp = 0) {
 
 // ------------------------------------------------------------- time utils
 const fmtCache = new Map();
-function timeParts(ms, tz) {
+const partsCache = new Map();
+export function timeParts(ms, tz) {
+  const key = `${tz}|${ms}`;
+  let p = partsCache.get(key);
+  if (!p) {
+    if (partsCache.size > 4096) partsCache.clear();
+    p = timePartsUncached(ms, tz);
+    partsCache.set(key, p);
+  }
+  return p;
+}
+function timePartsUncached(ms, tz) {
   if (!tz || tz === 'UTC' || tz === 'Etc/UTC' || tz === 'GMT') return utcParts(ms);
   const off = /^(?:GMT|UTC)\s*([+-])(\d{1,2})(?::?(\d{2}))?$/.exec(tz);
   if (off) {
     const mins = (off[1] === '-' ? -1 : 1) * (+off[2] * 60 + +(off[3] || 0));
     return utcParts(ms + mins * 60000);
   }
+  // the UTC offset only changes on DST switches: look it up once per hour
+  const hourKey = `${tz}|${Math.floor(ms / 3600000)}`;
+  let offset = offsetCache.get(hourKey);
+  if (offset === undefined) {
+    const q = intlParts(Math.floor(ms / 3600000) * 3600000, tz);
+    offset = Date.UTC(q.y, q.mo - 1, q.d, q.h, q.mi, q.s) - Math.floor(ms / 3600000) * 3600000;
+    if (offsetCache.size > 20000) offsetCache.clear();
+    offsetCache.set(hourKey, offset);
+  }
+  return utcParts(ms + offset);
+}
+const offsetCache = new Map();
+function intlParts(ms, tz) {
   let f = fmtCache.get(tz);
   if (!f) {
     f = new Intl.DateTimeFormat('en-US', {
@@ -122,18 +148,16 @@ const PREFIX_CONSTANTS = ['display.', 'line.style_', 'hline.style_', 'extend.', 
 // Names of the built-in price series, for input.source.
 export const SOURCES = ['open', 'high', 'low', 'close', 'volume', 'hl2', 'hlc3', 'ohlc4', 'hlcc4'];
 
-function inferMintick(data) {
-  let dec = 0;
-  const n = Math.min(data.close.length, 500);
-  for (let i = 0; i < n; i++) {
-    for (const v of [data.open[i], data.high[i], data.low[i], data.close[i]]) {
-      const s = String(v);
-      if (s.includes('e')) continue;
-      const p = s.indexOf('.');
-      if (p >= 0) dec = Math.max(dec, s.length - p - 1);
-    }
+const TICKS = [1, 0.5, 0.25, 0.2, 0.1, 0.05, 0.025, 0.02, 0.01, 0.005, 0.0025, 0.001, 0.0005, 0.00025, 0.0001,
+  0.00005, 0.00001, 0.000001, 0.0000001, 0.00000001];
+export function inferMintick(data) {
+  const n = Math.min(data.close.length, 2000);
+  const prices = [];
+  for (let i = 0; i < n; i++) prices.push(data.open[i], data.high[i], data.low[i], data.close[i]);
+  for (const tk of TICKS) {
+    if (prices.every((p) => Math.abs(p / tk - Math.round(p / tk)) < 1e-6)) return tk;
   }
-  return Math.pow(10, -Math.min(dec, 8));
+  return 0.00000001;
 }
 
 function inferTimeframe(time) {
@@ -151,7 +175,7 @@ function inferTimeframe(time) {
 function fmtNumber(v, fmt, mintick) {
   if (isNa(v)) return 'NaN';
   if (typeof v !== 'number') return String(v);
-  if (fmt === 'mintick') return v.toFixed(Math.max(0, Math.round(-Math.log10(mintick))));
+  if (fmt === 'mintick') return v.toFixed(Math.min(8, mintick.toFixed(10).replace(/0+$/, '').split('.')[1]?.length || 0));
   if (fmt === 'percent') return `${v.toFixed(2)}%`;
   if (fmt === 'volume') return Math.abs(v) >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : Math.abs(v) >= 1e3 ? `${(v / 1e3).toFixed(2)}K` : v.toFixed(2);
   if (typeof fmt === 'string' && /^[#0,]*\.?[#0]*$/.test(fmt) && fmt.length) {
@@ -175,6 +199,7 @@ export class Runtime {
     this.inputOverrides = options.inputs || {};
     this.tz = options.timezone || 'UTC';
     this.mintick = options.mintick || inferMintick(data);
+    this.pointvalue = options.pointvalue || 1;
     this.tf = options.timeframe ? { ...inferTimeframe(data.time), period: options.timeframe } : inferTimeframe(data.time);
     this.symbol = options.symbol || 'SYMBOL';
     this.slots = new Map();
@@ -183,6 +208,7 @@ export class Runtime {
     this.taState = new Map();
     this.functions = new Map();
     this.inputs = new Map();
+    this.inputCache = new Map();
     this.plots = new Map();
     this.shapes = new Map();
     this.hlines = new Map();
@@ -194,23 +220,39 @@ export class Runtime {
     this.logs = [];
     this.depth = 0;
     this.bar = 0;
-    for (const s of this.ast.body) if (s.type === 'FuncDef') this.functions.set(s.name, s);
+    this.types = new Map();
+    this.securities = new Map();
+    for (const s of this.ast.body) {
+      if (s.type === 'FuncDef') this.functions.set(s.name, s);
+      if (s.type === 'TypeDef') this.types.set(s.name, s.fields);
+    }
+    // Only variables that the script reads with the history operator need per-bar history.
+    this.histNames = new Set();
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { node.forEach(walk); return; }
+      if (node.type === 'History' && node.target.type === 'Ident') this.histNames.add(node.target.name);
+      for (const v of Object.values(node)) if (v && typeof v === 'object') walk(v);
+    };
+    walk(this.ast.body);
     this.builtins = buildBuiltins(this);
   }
 
   // -------------------------------------------------------------- run loop
   run() {
     const t0 = Date.now();
+    const progress = this.opts.onProgress;
     for (let b = 0; b < this.n; b++) {
       this.bar = b;
+      if (progress && b % 2000 === 0) progress(b, this.n);
       if (this.broker && b > 0) this.broker.processBar(b);
       this.globalScope = new Scope(null);
       const ctx = { path: '', scope: this.globalScope };
       for (const stmt of this.ast.body) {
-        if (stmt.type === 'FuncDef') continue;
+        if (stmt.type === 'FuncDef' || stmt.type === 'TypeDef') continue;
         this.exec(stmt, ctx);
       }
-      for (const s of this.varSlots) s.hist[b] = s.value;
+      for (const s of this.varSlots) if (s.hist) s.hist[b] = s.value;
       if (this.broker) {
         this.snapshotStrategy(b);
         this.broker.processOnClose(b);
@@ -227,6 +269,7 @@ export class Runtime {
       title: decl.title,
       overlay: decl.overlay,
       mintick: this.mintick,
+      pointvalue: this.pointvalue,
       timeframe: this.tf.period,
       inputs: [...this.inputs.values()],
       plots: [...this.plots.values()],
@@ -248,7 +291,7 @@ export class Runtime {
         openTrades: br.open.map((t) => ({
           entryId: t.entryId, dir: t.dir, qty: t.qty, entryPrice: t.entryPrice, entryBar: t.entryBar,
           entryTime: t.entryTime, entryComment: t.entryComment,
-          profit: t.dir * (last - t.entryPrice) * t.qty - t.entryCommission,
+          profit: t.dir * (last - t.entryPrice) * t.qty * br.pv - t.entryCommission,
         })),
         fills: br.fills,
         equity: br.equity,
@@ -309,7 +352,7 @@ export class Runtime {
       case 'syminfo.ticker': case 'syminfo.tickerid': case 'syminfo.description': return this.symbol;
       case 'syminfo.prefix': return '';
       case 'syminfo.mintick': return this.mintick;
-      case 'syminfo.pointvalue': return 1;
+      case 'syminfo.pointvalue': return this.pointvalue;
       case 'syminfo.currency': return this.opts.currency || 'USD';
       case 'syminfo.basecurrency': return '';
       case 'syminfo.timezone': return this.tz;
@@ -377,6 +420,7 @@ export class Runtime {
 
   slotAt(slot, off) {
     if (off === 0) return slot.value;
+    if (!slot.hist) return NaN;
     const idx = this.bar - off;
     if (idx < 0) return NaN;
     let v = slot.hist[idx];
@@ -388,10 +432,10 @@ export class Runtime {
     return v === undefined ? NaN : v;
   }
 
-  getSlot(key, isVar) {
+  getSlot(key, isVar, name) {
     let slot = this.slots.get(key);
     if (!slot) {
-      slot = { value: NaN, hist: [], isVar, init: false };
+      slot = { value: NaN, hist: name === undefined || this.histNames.has(name) ? [] : null, isVar, init: false, isInt: false };
       this.slots.set(key, slot);
       if (isVar) this.varSlots.push(slot);
     }
@@ -401,6 +445,11 @@ export class Runtime {
   lookupIdent(n, ctx) {
     const slot = ctx.scope.lookup(n.name);
     if (slot) return slot.value;
+    const dot = n.name.indexOf('.');
+    if (dot > 0) {
+      const base = ctx.scope.lookup(n.name.slice(0, dot));
+      if (base) return this.getField(base.value, n.name.slice(dot + 1).split('.'), n);
+    }
     const v = this.builtinVar(n.name, this.bar);
     if (v !== undefined) return v;
     if (n.name in CONSTANTS) return CONSTANTS[n.name];
@@ -411,6 +460,24 @@ export class Runtime {
     }
     if (this.functions.has(n.name) || this.builtins[n.name]) return n.name; // function reference
     throw new PineRuntimeError(`Undeclared identifier '${n.name}'`, n.line);
+  }
+
+  getField(obj, path, n) {
+    let v = obj;
+    for (const f of path) {
+      if (isNa(v)) return NaN; // field of an na object
+      if (!v || !v.__udt) throw new PineRuntimeError(`'${n.name}' is not a field of a user-defined type`, n.line);
+      if (!(f in v)) throw new PineRuntimeError(`type ${v.__udt} has no field '${f}'`, n.line);
+      v = v[f];
+    }
+    return v;
+  }
+
+  setSlot(slot, v) {
+    if (slot.isInt && typeof v === 'number') v = Math.trunc(v);
+    slot.value = v;
+    if (slot.hist) slot.hist[this.bar] = v;
+    return v;
   }
 
   // ----------------------------------------------------------- statements
@@ -432,18 +499,21 @@ export class Runtime {
       case 'VarDecl': {
         const key = ctx.path ? `${ctx.path}#${s.id}` : s.id;
         const isVar = !!s.mode;
-        const slot = this.getSlot(key, isVar);
+        const slot = this.getSlot(key, isVar, s.name);
+        slot.isInt = s.varType === 'int';
         if (!isVar || !slot.init) {
-          slot.value = this.evalRhs(s.init, ctx);
+          this.setSlot(slot, this.evalRhs(s.init, ctx));
           slot.init = true;
-        }
-        slot.hist[this.bar] = slot.value;
+        } else if (slot.hist) slot.hist[this.bar] = slot.value;
         ctx.scope.set(s.name, slot);
         return slot.value;
       }
       case 'TupleDecl': {
-        const v = this.evalRhs(s.init, ctx);
-        if (!Array.isArray(v)) throw new PineRuntimeError('right side of tuple assignment must return a tuple', s.line);
+        let v = this.evalRhs(s.init, ctx);
+        if (!Array.isArray(v)) {
+          if (!isNa(v)) throw new PineRuntimeError('right side of tuple assignment must return a tuple', s.line);
+          v = s.names.map(() => NaN); // e.g. request.security before its first higher-timeframe bar
+        }
         s.names.forEach((name, i) => {
           if (name === '_') return;
           let slot;
@@ -451,23 +521,37 @@ export class Runtime {
             slot = ctx.scope.lookup(name);
             if (!slot) throw new PineRuntimeError(`Undeclared identifier '${name}'`, s.line);
           } else {
-            slot = this.getSlot(`${ctx.path}#${s.id}:${i}`, false);
+            slot = this.getSlot(`${ctx.path}#${s.id}:${i}`, false, name);
             ctx.scope.set(name, slot);
           }
-          slot.value = v[i];
-          slot.hist[this.bar] = v[i];
+          this.setSlot(slot, v[i]);
         });
         return v;
       }
       case 'Assign': {
+        const dot = s.name.indexOf('.');
+        if (dot > 0 && !ctx.scope.lookup(s.name)) {
+          // obj.field := value
+          const base = ctx.scope.lookup(s.name.slice(0, dot));
+          if (!base) throw new PineRuntimeError(`Undeclared identifier '${s.name.slice(0, dot)}'`, s.line);
+          const path = s.name.slice(dot + 1).split('.');
+          const field = path.pop();
+          const obj = path.length ? this.getField(base.value, path, s) : base.value;
+          if (isNa(obj)) throw new PineRuntimeError(`Cannot assign '${s.name}': the object is na`, s.line);
+          if (!obj.__udt || !(field in obj)) throw new PineRuntimeError(`'${s.name}' is not a field of a user-defined type`, s.line);
+          let v = this.evalRhs(s.value, ctx);
+          if (s.op !== ':=') v = this.binary(s.op[0], obj[field], v);
+          if (obj.__int && obj.__int.has(field) && typeof v === 'number') v = Math.trunc(v);
+          obj[field] = v;
+          return v;
+        }
         const slot = ctx.scope.lookup(s.name);
         if (!slot) throw new PineRuntimeError(`Undeclared identifier '${s.name}' (declare it with '=' before using ':=')`, s.line);
         let v = this.evalRhs(s.value, ctx);
         if (s.op !== ':=') v = this.binary(s.op[0], slot.value, v);
-        slot.value = v;
-        slot.hist[this.bar] = v;
-        return v;
+        return this.setSlot(slot, v);
       }
+      case 'TypeDef': return NaN;
       case 'ExprStmt': return this.eval(s.expr, ctx);
       case 'If': return this.evalIf(s, ctx);
       case 'Switch': return this.evalSwitch(s, ctx);
@@ -534,7 +618,7 @@ export class Runtime {
     if (!(step > 0)) step = 1;
     const dir = to >= from ? 1 : -1;
     const loopScope = new Scope(ctx.scope);
-    const slot = this.getSlot(`${ctx.path}#for${s.id}`, false);
+    const slot = this.getSlot(`${ctx.path}#for${s.id}`, false, s.var);
     loopScope.set(s.var, slot);
     const inner = { path: ctx.path, scope: loopScope };
     let v = NaN;
@@ -555,8 +639,8 @@ export class Runtime {
     const arr = this.eval(s.iterable, ctx);
     const items = arr && arr.__array ? [...arr.items] : Array.isArray(arr) ? arr : [];
     const loopScope = new Scope(ctx.scope);
-    const itemSlot = this.getSlot(`${ctx.path}#forin${s.id}`, false);
-    const idxSlot = this.getSlot(`${ctx.path}#forinidx${s.id}`, false);
+    const itemSlot = this.getSlot(`${ctx.path}#forin${s.id}`, false, s.item);
+    const idxSlot = this.getSlot(`${ctx.path}#forinidx${s.id}`, false, s.index || '');
     loopScope.set(s.item, itemSlot);
     if (s.index) loopScope.set(s.index, idxSlot);
     const inner = { path: ctx.path, scope: loopScope };
@@ -655,12 +739,30 @@ export class Runtime {
     let name = n.callee;
     if (n.method) {
       const obj = this.eval(n.args[0], ctx);
+      if (obj && obj.__udt) return this.udtMethod(obj, name, n);
       const prefix = obj && obj.__array ? 'array.' : typeof obj === 'string' ? 'str.' : 'math.';
       return this.callBuiltin(prefix + name, n, ctx, [obj, ...n.args.slice(1).map((a) => this.eval(a, ctx))]);
     }
     const user = this.functions.get(name);
     if (user) return this.callUser(user, n, ctx);
-    if (this.builtins[name]) return this.callBuiltin(name, n, ctx);
+    if (name === 'request.security') return this.evalSecurity(n, ctx);
+    if (name === 'runtime.error') throw new PineRuntimeError(String(this.eval(n.args[0] || n.named.message, ctx)), n.line);
+    const tdot = name.lastIndexOf('.');
+    if (tdot > 0 && this.types.has(name.slice(0, tdot))) return this.udtCall(name.slice(0, tdot), name.slice(tdot + 1), n, ctx);
+    if (this.builtins[name]) {
+      // inputs can't change during a run: evaluate them once per call site
+      if (name === 'input' || name.startsWith('input.')) {
+        const key = this.callKey(n, ctx);
+        const c = this.inputCache.get(key);
+        if (c !== undefined) return c.source ? this.builtinVar(c.source, this.bar) : c.value;
+        const value = this.callBuiltin(name, n, ctx);
+        const inp = this.inputs.get(key);
+        const src = inp && inp.type === 'source' ? (SOURCES.includes(this.inputOverrides[inp.key]) ? this.inputOverrides[inp.key] : inp.defval) : null;
+        this.inputCache.set(key, { value, source: src });
+        return value;
+      }
+      return this.callBuiltin(name, n, ctx);
+    }
     // method-call syntax on a variable: myArray.push(x)
     const dot = name.indexOf('.');
     if (dot > 0) {
@@ -668,18 +770,86 @@ export class Runtime {
       if (slot) {
         const obj = slot.value;
         const rest = name.slice(dot + 1);
+        if (obj && obj.__udt) return this.udtMethod(obj, rest, n);
         const prefix = obj && obj.__array ? 'array.' : typeof obj === 'string' ? 'str.' : 'math.';
         return this.callBuiltin(prefix + rest, n, ctx, [obj, ...n.args.map((a) => this.eval(a, ctx))]);
       }
     }
-    if (/^(label|line|box|table|linefill|polyline|chart\.point|log|runtime)\./.test(name) || name === 'alert' || name === 'alertcondition' || name === 'fill' || name === 'library') {
+    if (/^(label|line|box|table|linefill|polyline|chart\.point|log)\./.test(name) || name === 'alert' || name === 'alertcondition' || name === 'fill' || name === 'library') {
       for (const a of n.args) this.eval(a, ctx);
       return NaN;
     }
     if (name.startsWith('request.')) {
-      throw new PineRuntimeError(`${name}() is not supported yet (only the chart's own symbol/timeframe can be backtested)`, n.line);
+      throw new PineRuntimeError(`${name}() is not supported yet`, n.line);
     }
     throw new PineRuntimeError(`Could not find function or function reference '${name}'`, n.line);
+  }
+
+  // ---- user-defined types
+  udtCall(type, method, n, ctx) {
+    const fields = this.types.get(type);
+    if (method === 'new') {
+      const obj = { __udt: type, __int: new Set(fields.filter((f) => f.type === 'int').map((f) => f.name)) };
+      fields.forEach((f, i) => {
+        let v;
+        if (i < n.args.length) v = this.eval(n.args[i], ctx);
+        else if (n.named[f.name]) v = this.eval(n.named[f.name], ctx);
+        else if (f.def) v = this.eval(f.def, ctx);
+        else v = NaN;
+        obj[f.name] = f.type === 'int' && typeof v === 'number' ? Math.trunc(v) : v;
+      });
+      return obj;
+    }
+    if (method === 'copy') return this.udtMethod(this.eval(n.args[0], ctx), 'copy', n);
+    throw new PineRuntimeError(`${type}.${method}() is not supported`, n.line);
+  }
+
+  udtMethod(obj, method, n) {
+    if (method === 'copy') return isNa(obj) ? NaN : { ...obj };
+    throw new PineRuntimeError(`method '${method}' is not supported on type ${obj.__udt}`, n.line);
+  }
+
+  // ---- request.security on the chart's own symbol at a higher timeframe.
+  // Higher-timeframe bars are built from the chart's bars. With
+  // lookahead=barmerge.lookahead_on every chart bar sees the value of the
+  // higher-timeframe bar it belongs to; with lookahead off it sees the last
+  // completed one (what TradingView shows on historical bars).
+  evalSecurity(n, ctx) {
+    const arg = (i, name) => (i < n.args.length ? n.args[i] : n.named[name]);
+    const tfNode = arg(1, 'timeframe');
+    const exprNode = arg(2, 'expression');
+    if (!exprNode) throw new PineRuntimeError('request.security() needs an expression', n.line);
+    const lookNode = arg(4, 'lookahead');
+    const lookahead = lookNode ? this.truthy(this.eval(lookNode, ctx)) : false;
+    const tfRaw = tfNode ? this.eval(tfNode, ctx) : '';
+    const tf = tfRaw === '' || isNa(tfRaw) ? this.tf.period : String(tfRaw);
+    const secs = tfSeconds(tf);
+    if (secs <= this.tf.seconds) return this.eval(exprNode, ctx); // same (or lower) timeframe
+    const key = `${this.callKey(n, ctx)}|${tf}`;
+    let sec = this.securities.get(key);
+    if (!sec) {
+      sec = buildHigherTimeframe(this.data, tf, secs, this.tz, this.tf.seconds);
+      sec.values = [];
+      sec.done = -1;
+      sec.varSlots = [];
+      sec.tf = { ...inferTimeframe(sec.data.time), period: tf, seconds: secs };
+      this.securities.set(key, sec);
+    }
+    const b = this.bar;
+    const target = lookahead || sec.last[b] ? sec.map[b] : sec.map[b] - 1;
+    while (sec.done < target) {
+      const hb = sec.done + 1;
+      const saved = [this.data, this.n, this.bar, this.varSlots, this.tf];
+      this.data = sec.data; this.n = sec.data.close.length; this.bar = hb; this.varSlots = sec.varSlots; this.tf = sec.tf;
+      try {
+        sec.values[hb] = this.eval(exprNode, { path: `${ctx.path}S${n.id}`, scope: ctx.scope });
+        for (const s of sec.varSlots) if (s.hist) s.hist[hb] = s.value;
+      } finally {
+        [this.data, this.n, this.bar, this.varSlots, this.tf] = saved;
+      }
+      sec.done = hb;
+    }
+    return target >= 0 ? sec.values[target] : NaN;
   }
 
   callUser(f, n, ctx) {
@@ -693,9 +863,8 @@ export class Runtime {
         else if (n.named[p.name]) v = this.eval(n.named[p.name], ctx);
         else if (p.def) v = this.eval(p.def, ctx);
         else v = NaN;
-        const slot = this.getSlot(`${path}#p${i}`, false);
-        slot.value = v;
-        slot.hist[this.bar] = v;
+        const slot = this.getSlot(`${path}#p${i}`, false, p.name);
+        this.setSlot(slot, v);
         scope.set(p.name, slot);
       });
       let v = NaN;
@@ -715,13 +884,11 @@ export class Runtime {
     if (preArgs) args = preArgs;
     else if (params === '...') args = n.args.map((a) => this.eval(a, ctx));
     else {
-      args = new Array(params.length);
-      n.args.forEach((a, i) => { args[i] = this.eval(a, ctx); });
       // unknown named arguments are ignored (cosmetic params like editable=, display=)
-      for (const [k, a] of Object.entries(n.named)) {
-        const i = params.indexOf(k);
-        if (i >= 0) args[i] = this.eval(a, ctx);
-      }
+      if (!n.named_) n.named_ = Object.entries(n.named).map(([k, a]) => [params.indexOf(k), a]).filter(([i]) => i >= 0);
+      args = new Array(params.length);
+      for (let i = 0; i < n.args.length; i++) args[i] = this.eval(n.args[i], ctx);
+      for (const [i, a] of n.named_) args[i] = this.eval(a, ctx);
     }
     return fn(args, this.callKey(n, ctx), n, ctx);
   }
@@ -855,7 +1022,7 @@ function buildBuiltins(rt) {
         currency: a[14], slippage: a[15], commission_type: a[16], commission_value: a[17],
         process_orders_on_close: a[18], close_entries_rule: a[19],
       };
-      rt.broker = new Broker(rt.data, rt.mintick, rt.opts.properties || {});
+      rt.broker = new Broker(rt.data, rt.mintick, rt.opts.properties || {}, rt.pointvalue);
       rt.broker.configure(cfg);
       rt.broker.bar = 0;
     }
@@ -888,7 +1055,7 @@ function buildBuiltins(rt) {
     if (!rt.inputs.has(key)) {
       rt.inputs.set(key, {
         key: inKey, title: p.title || inKey, type, defval,
-        options: p.options && p.options.__array ? p.options.items : undefined,
+        options: Array.isArray(p.options) ? p.options : p.options && p.options.__array ? p.options.items : undefined,
         minval: p.minval, maxval: p.maxval, step: p.step, group: p.group, tooltip: p.tooltip, inline: p.inline,
       });
     }
@@ -1060,7 +1227,7 @@ function buildBuiltins(rt) {
   def('strategy.opentrades.entry_time', ['trade_num'], openField((t) => t.entryTime));
   def('strategy.opentrades.entry_id', ['trade_num'], openField((t) => t.entryId));
   def('strategy.opentrades.size', ['trade_num'], openField((t) => t.dir * t.qty));
-  def('strategy.opentrades.profit', ['trade_num'], openField((t) => t.dir * (rt.data.close[rt.bar] - t.entryPrice) * t.qty));
+  def('strategy.opentrades.profit', ['trade_num'], openField((t) => t.dir * (rt.data.close[rt.bar] - t.entryPrice) * t.qty * rt.pointvalue));
   def('strategy.opentrades.commission', ['trade_num'], openField((t) => t.entryCommission));
   def('strategy.opentrades.max_runup', ['trade_num'], openField((t) => t.maxFav));
   def('strategy.opentrades.max_drawdown', ['trade_num'], openField((t) => t.maxAdv));
@@ -1131,6 +1298,44 @@ function buildBuiltins(rt) {
   def('array.some', ['id'], ([a]) => A(a).some((x) => rt.truthy(x)));
 
   return B;
+}
+
+function buildHigherTimeframe(d, tf, secs, tz, chartSecs) {
+  const m = /^(\d*)([SDWM]?)$/.exec(tf) || [];
+  const k = m[1] ? +m[1] : 1;
+  const unit = m[2] || '';
+  const bucket = (t) => {
+    if (unit === '' || unit === 'S') return Math.floor(t / (secs * 1000));
+    const p = timeParts(t, tz);
+    const day = Date.UTC(p.y, p.mo - 1, p.d) / 86400000;
+    if (unit === 'D') return Math.floor(day / k);
+    if (unit === 'W') return Math.floor((day + 3) / (7 * k)); // weeks start on Monday
+    return Math.floor((p.y * 12 + p.mo - 1) / k);
+  };
+  const out = { time: [], open: [], high: [], low: [], close: [], volume: [] };
+  const map = new Int32Array(d.time.length);
+  const last = new Uint8Array(d.time.length);
+  let prev = null;
+  for (let i = 0; i < d.time.length; i++) {
+    const bk = bucket(d.time[i]);
+    if (bk !== prev) {
+      if (i > 0) last[i - 1] = 1;
+      out.time.push(d.time[i]); out.open.push(d.open[i]); out.high.push(d.high[i]); out.low.push(d.low[i]);
+      out.close.push(d.close[i]); out.volume.push(d.volume[i]);
+      prev = bk;
+    } else {
+      const j = out.time.length - 1;
+      out.high[j] = Math.max(out.high[j], d.high[i]);
+      out.low[j] = Math.min(out.low[j], d.low[i]);
+      out.close[j] = d.close[i];
+      out.volume[j] += d.volume[i];
+    }
+    map[i] = out.time.length - 1;
+  }
+  // the final chart bar closes its higher-timeframe bar only if its close time reaches the boundary
+  const n = d.time.length;
+  if (n && bucket(d.time[n - 1] + chartSecs * 1000) !== bucket(d.time[n - 1])) last[n - 1] = 1;
+  return { data: out, map, last };
 }
 
 function trimUndef(a) {

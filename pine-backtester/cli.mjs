@@ -2,22 +2,24 @@
 // Command-line backtest:  node cli.mjs my_strategy.pine data.csv [--input "Fast length=10"] [--json]
 import { readFileSync } from 'node:fs';
 import { runScript } from './src/runtime.js';
-import { parseCSV, sampleData } from './src/data.js';
+import { parseCSV, sampleData, guessContract } from './src/data.js';
 
 const args = process.argv.slice(2);
-const flags = { inputs: {}, json: false, trades: false, tz: 'UTC' };
+const flags = { inputs: {}, json: false, trades: false, tz: 'UTC', pointvalue: undefined, mintick: undefined };
 const pos = [];
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === '--json') flags.json = true;
   else if (a === '--trades') flags.trades = true;
   else if (a === '--tz') flags.tz = args[++i];
+  else if (a === '--pointvalue') flags.pointvalue = +args[++i];
+  else if (a === '--mintick') flags.mintick = +args[++i];
   else if (a === '--input') {
     const [k, ...v] = args[++i].split('=');
     const val = v.join('=');
     flags.inputs[k] = val === 'true' ? true : val === 'false' ? false : Number.isNaN(+val) ? val : +val;
   } else if (a === '-h' || a === '--help') {
-    console.log('usage: node cli.mjs <script.pine> [data.csv] [--input "Title=value"]... [--trades] [--json] [--tz America/New_York]');
+    console.log('usage: node cli.mjs <script.pine> [data.csv] [--input "Title=value"]... [--trades] [--json] [--tz America/New_York] [--pointvalue 2] [--mintick 0.25]');
     process.exit(0);
   } else pos.push(a);
 }
@@ -28,9 +30,15 @@ if (!pos[0]) {
 
 const source = readFileSync(pos[0], 'utf8');
 const data = pos[1] ? parseCSV(readFileSync(pos[1], 'utf8')) : sampleData();
+const contract = pos[1] ? guessContract(pos[1].split(/[\\/]/).pop()) : null;
+const pointvalue = flags.pointvalue ?? contract?.pointvalue;
+const mintick = flags.mintick ?? contract?.mintick;
+if (contract && (flags.pointvalue === undefined || flags.mintick === undefined)) {
+  console.log(`contract: ${contract.root} (point value ${pointvalue}, tick ${mintick}) — override with --pointvalue / --mintick`);
+}
 let res;
 try {
-  res = runScript(source, data, { inputs: flags.inputs, timezone: flags.tz });
+  res = runScript(source, data, { inputs: flags.inputs, timezone: flags.tz, pointvalue, mintick });
 } catch (e) {
   console.error(String(e.message || e));
   process.exit(1);
@@ -46,7 +54,8 @@ const money = (v) => (Number.isFinite(v) ? v.toLocaleString('en-US', { maximumFr
 const pct = (v) => (Number.isFinite(v) ? `${v.toFixed(2)}%` : '—');
 const iso = (t) => new Date(t).toISOString().slice(0, 16).replace('T', ' ');
 console.log(`${res.title}  —  ${data.close.length} bars ${iso(data.time[0])} → ${iso(data.time.at(-1))}  (${res.elapsedMs} ms)`);
-if (res.inputs.length) console.log('inputs:', res.inputs.map((i) => `${i.key}=${flags.inputs[i.key] ?? i.defval}`).join(', '));
+const changed = Object.keys(flags.inputs);
+if (res.inputs.length) console.log(`inputs: ${res.inputs.length}${changed.length ? ` (changed: ${changed.map((k) => `${k}=${flags.inputs[k]}`).join(', ')})` : ', all at their defaults'}`);
 if (!res.strategy) {
   console.log('(indicator script: no trades)');
   process.exit(0);

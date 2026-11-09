@@ -1,6 +1,6 @@
 // Browser UI: data loading, Pine editor, chart rendering and the strategy tester.
-import { runScript, SOURCES } from '../src/runtime.js';
-import { parseCSV, sampleData, fetchBinance } from '../src/data.js';
+import { runScript, SOURCES, timeParts } from '../src/runtime.js';
+import { parseCSV, sampleData, fetchBinance, guessContract } from '../src/data.js';
 import { EXAMPLES } from '../src/examples.js';
 
 const LW = window.LightweightCharts;
@@ -22,6 +22,9 @@ const state = {
   eqChart: null,
   candleSeries: null,
   keepRange: null,
+  // contract specs: point value (currency per 1.0 price move per contract) and tick size (null = detect)
+  spec: { pointvalue: 1, mintick: null, root: '' },
+  tz: store.get('tz', 'UTC'),
 };
 
 // ------------------------------------------------------------ formatting
@@ -32,12 +35,18 @@ const fmtQty = (v) => (Number.isFinite(v) ? (Math.abs(v - Math.round(v)) < 1e-9 
 const signCls = (v) => (v > 0 ? 'pos' : v < 0 ? 'neg' : '');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 function fmtTime(ms) {
-  const d = new Date(ms);
+  const t = timeParts(ms, state.tz);
   const p = (x) => String(x).padStart(2, '0');
-  const date = `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
-  return d.getUTCHours() || d.getUTCMinutes() ? `${date} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}` : date;
+  const date = `${t.y}-${p(t.mo)}-${p(t.d)}`;
+  return t.h || t.mi ? `${date} ${p(t.h)}:${p(t.mi)}` : date;
 }
-const priceDecimals = (mintick) => Math.max(0, Math.min(8, Math.round(-Math.log10(mintick || 0.01))));
+// The chart library draws UTC timestamps; shift each bar so the axis shows the chosen time zone.
+function chartTime(ms) {
+  if (state.tz === 'UTC') return Math.floor(ms / 1000);
+  const t = timeParts(ms, state.tz);
+  return Date.UTC(t.y, t.mo - 1, t.d, t.h, t.mi, t.s) / 1000;
+}
+const priceDecimals = (mintick) => { const s = (mintick || 0.01).toFixed(10).replace(/0+$/, ''); return Math.min(8, s.split('.')[1]?.length || 0); };
 
 function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 function cssColor(c, fallback) {
@@ -158,14 +167,30 @@ function setSourceUI() {
   if (src === 'sample') loadSample();
 }
 $('dataSource').addEventListener('change', setSourceUI);
-function setData(d, label, symbol) {
+function setData(d, label, symbol, specName) {
+  const c = guessContract(specName || symbol);
+  state.spec = c ? { pointvalue: c.pointvalue, mintick: c.mintick, root: c.root } : { pointvalue: 1, mintick: null, root: '' };
   const keep = state.data && state.data.time.length === d.time.length && state.data.time[0] === d.time[0];
   state.keepRange = keep && state.chart ? state.chart.timeScale().getVisibleLogicalRange() : null;
   state.data = d;
   state.dataLabel = label;
   state.symbol = symbol;
-  $('dataInfo').textContent = `${label} · ${d.time.length.toLocaleString()} bars · ${fmtTime(d.time[0])} → ${fmtTime(d.time[d.time.length - 1])}`;
+  showDataInfo();
 }
+function showDataInfo() {
+  const d = state.data;
+  if (!d) return;
+  const spec = state.spec.root ? ` · ${state.spec.root} $${state.spec.pointvalue}/pt, tick ${state.spec.mintick}` : '';
+  $('dataInfo').textContent = `${state.dataLabel} · ${d.time.length.toLocaleString()} bars · ${fmtTime(d.time[0])} → ${fmtTime(d.time[d.time.length - 1])}${spec}`;
+}
+$('tz').value = state.tz;
+if ($('tz').value !== state.tz) { state.tz = 'UTC'; $('tz').value = 'UTC'; }
+$('tz').addEventListener('change', () => {
+  state.tz = $('tz').value;
+  store.set('tz', state.tz);
+  showDataInfo();
+  run();
+});
 function loadSample() {
   setData(sampleData(1500), 'Sample data (4h)', 'SAMPLE');
   run();
@@ -188,8 +213,8 @@ $('csvFile').addEventListener('change', async (e) => {
   if (!f) return;
   try {
     const d = parseCSV(await f.text());
-    const sym = f.name.replace(/\.[^.]+$/, '').split(/[_ ,]/)[0].toUpperCase();
-    setData(d, f.name, sym || 'CSV');
+    const sym = f.name.replace(/\.[^.]+$/, '').split(',')[0].trim().toUpperCase();
+    setData(d, f.name, sym || 'CSV', f.name);
     run();
   } catch (err) {
     setStatus(`Could not read ${f.name}: ${err.message}`, true);
@@ -204,25 +229,77 @@ function setStatus(msg, isError = false, ok = false) {
   el.className = `status${isError ? ' error' : ''}${ok ? ' ok' : ''}`;
 }
 
+// The backtest runs in a Web Worker so long 1-minute datasets don't freeze the page.
+let worker = null;
+let runId = 0;
+function makeWorker() {
+  if (window.__PBT_ENGINE__) {
+    // single-file build: the engine source is embedded in the page
+    const url = URL.createObjectURL(new Blob([window.__PBT_ENGINE__], { type: 'text/javascript' }));
+    return new Worker(url);
+  }
+  return new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+}
+function runOptions() {
+  return {
+    inputs: state.inputOverrides,
+    properties: state.propOverrides,
+    symbol: state.symbol,
+    pointvalue: state.spec.pointvalue,
+    mintick: state.spec.mintick || undefined,
+    timezone: state.tz,
+  };
+}
+function showError(message, line) {
+  const ln = line || (/line (\d+)/.exec(message) || [])[1];
+  refreshEditor(ln ? +ln : undefined);
+  setStatus(message, true);
+}
+function runInline(source, options) {
+  try {
+    finishRun(runScript(source, state.data, options));
+  } catch (e) {
+    showError(e.message, e.line);
+  }
+}
 function run() {
   if (!state.data) return;
-  let res;
+  const id = ++runId;
+  const source = code.value;
+  const options = runOptions();
+  if (worker) { worker.terminate(); worker = null; }
   try {
-    res = runScript(code.value, state.data, {
-      inputs: state.inputOverrides,
-      properties: state.propOverrides,
-      symbol: state.symbol,
-    });
-  } catch (e) {
-    const line = e.line || (/line (\d+)/.exec(e.message) || [])[1];
-    refreshEditor(line ? +line : undefined);
-    setStatus(e.message, true);
+    worker = makeWorker();
+  } catch {
+    runInline(source, options);
     return;
   }
+  const w = worker;
+  const n = state.data.time.length;
+  setStatus(`Running ${n.toLocaleString()} bars…`);
+  $('runBtn').disabled = true;
+  const done = () => { if (worker === w) { w.terminate(); worker = null; } $('runBtn').disabled = false; };
+  w.onmessage = (e) => {
+    const m = e.data;
+    if (m.id !== id) return;
+    if (m.type === 'progress') setStatus(`Running… ${Math.round((m.bar / m.n) * 100)}% of ${n.toLocaleString()} bars`);
+    else if (m.type === 'done') { done(); finishRun(m.res); }
+    else if (m.type === 'error') { done(); showError(m.message, m.line); }
+  };
+  w.onerror = (ev) => {
+    // workers unavailable (e.g. some file:// setups): run on the page instead
+    ev.preventDefault();
+    done();
+    if (id === runId) runInline(source, options);
+  };
+  w.postMessage({ id, source, data: state.data, options });
+}
+function finishRun(res) {
   refreshEditor();
   state.result = res;
   const s = res.strategy;
-  setStatus(`${res.title} · ran ${state.data.time.length.toLocaleString()} bars in ${res.elapsedMs} ms${s ? ` · ${s.trades.length} closed trade${s.trades.length === 1 ? '' : 's'}${s.openTrades.length ? `, ${s.openTrades.length} open` : ''}` : ''}`, false, true);
+  const secs = (res.elapsedMs / 1000).toFixed(res.elapsedMs < 10000 ? 2 : 1);
+  setStatus(`${res.title} · ran ${state.data.time.length.toLocaleString()} bars in ${secs} s${s ? ` · ${s.trades.length} closed trade${s.trades.length === 1 ? '' : 's'}${s.openTrades.length ? `, ${s.openTrades.length} open` : ''}` : ''}`, false, true);
   renderChart(res);
   renderTester(res);
 }
@@ -260,7 +337,7 @@ const SHAPE_MAP = {
 function renderChart(res) {
   const d = state.data;
   const th = chartTheme();
-  const times = d.time.map((t) => Math.floor(t / 1000));
+  const times = d.time.map(chartTime);
   const intraday = d.time.length > 1 && d.time[1] - d.time[0] < 86400000;
   const prevRange = state.keepRange || (state.chart ? state.chart.timeScale().getVisibleLogicalRange() : null);
   state.keepRange = null;
@@ -295,7 +372,7 @@ function renderChart(res) {
   const paneSeries = { 0: [candles], 1: [] };
   const plotSeries = [];
   for (const p of res.plots) {
-    if (p.display === 'none') continue;
+    if (/none|data_window|status_line|price_scale/.test(String(p.display || '')) && !/display\.all|pane/.test(String(p.display))) continue;
     const pane = p.overlay ? 0 : 1;
     const color = cssColor(p.colors.find(Boolean), th.accent);
     const common = { color, lastValueVisible: true, priceLineVisible: false, title: '' };
@@ -314,14 +391,15 @@ function renderChart(res) {
     }
     const breaks = style !== 'line' && style !== 'stepline' && style !== 'area';
     const pts = [];
+    const shown = (i) => Number.isFinite(p.values[i]) && !!p.colors[i];
     for (let i = 0; i < times.length; i++) {
       const j = i + (p.offset || 0);
       if (j < 0 || j >= times.length) continue;
-      const v = p.values[i];
-      const c = p.colors[i];
-      if (!Number.isFinite(v) || !c) { if (breaks) pts.push({ time: times[j] }); continue; }
-      const pt = { time: times[j], value: v };
-      if (c) pt.color = cssColor(c);
+      if (!shown(i)) { if (breaks) pts.push({ time: times[j] }); continue; }
+      const pt = { time: times[j], value: p.values[i], color: cssColor(p.colors[i]) };
+      // The chart joins lines across empty points and colours each segment by its
+      // starting point, so hide the segment that would bridge a gap.
+      if (breaks && i + 1 < times.length && !shown(i + 1)) pt.color = 'rgba(0, 0, 0, 0)';
       pts.push(pt);
     }
     pts.sort((a, b) => a.time - b.time);
@@ -457,7 +535,7 @@ function renderEquity(res) {
     bottomLineColor: th.down, bottomFillColor1: withAlpha(th.down, 0.04), bottomFillColor2: withAlpha(th.down, 0.28),
     lineWidth: 2, priceLineVisible: false, title: 'Equity',
   });
-  const times = d.time.map((t) => Math.floor(t / 1000));
+  const times = d.time.map(chartTime);
   eq.setData(times.map((t, i) => (Number.isFinite(s.equity[i]) ? { time: t, value: s.equity[i] } : { time: t })));
   if ($('showBH').checked) {
     const bh = ch.addSeries(LW.LineSeries, { color: withAlpha(th.fg, 0.7), lineWidth: 1, lineStyle: 2, priceLineVisible: false, title: 'Buy & hold' });
@@ -546,6 +624,8 @@ function renderProperties(cfg, res) {
     ['Bars', state.data.time.length.toLocaleString()],
     ['Range', `${fmtTime(state.data.time[0])} → ${fmtTime(state.data.time[state.data.time.length - 1])}`],
     ['Tick size (syminfo.mintick)', String(res.mintick)],
+    ['Point value (syminfo.pointvalue)', String(res.pointvalue ?? 1)],
+    ['Time zone', state.tz],
     ['Initial capital', fmtMoney(cfg.initial_capital)],
     ['Order size', `${fmtQty(cfg.default_qty_value)} ${qtyType}`],
     ['Pyramiding', String(cfg.pyramiding || 0)],
@@ -584,7 +664,7 @@ function openSettings() {
       } else ctl = `<input class="field" type="text" id="${id}" value="${esc(cur)}">`;
       const grp = inp.group && inp.group !== lastGroup ? `<div class="grp">${esc(inp.group)}</div>` : '';
       lastGroup = inp.group;
-      return `${grp}<label class="row-field" for="${id}"><span>${esc(inp.title)}${inp.tooltip ? `<span class="hint"> — ${esc(inp.tooltip)}</span>` : ''}</span>${ctl}</label>`;
+      return `${grp}<label class="row-field" for="${id}"${inp.tooltip ? ` title="${esc(inp.tooltip)}"` : ''}><span>${esc(inp.title)}${inp.tooltip ? ' <span class="hint" aria-hidden="true">ⓘ</span>' : ''}</span>${ctl}</label>`;
     }).join('');
   }
   const cfg = res && res.strategy ? res.strategy.config : null;
@@ -603,6 +683,10 @@ function openSettings() {
         ${[['percent', '%'], ['cash_per_contract', 'Cash per contract'], ['cash_per_order', 'Cash per order']].map(([v, l]) => `<option value="${v}" ${p('commission_type') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="row-field" for="pr_slip"><span>Slippage (ticks)</span><input class="field" type="number" id="pr_slip" value="${p('slippage') || 0}" min="0" step="1"></label>
       <label class="row-field" for="pr_poc"><span>Fill orders on bar close</span><input type="checkbox" id="pr_poc" ${p('process_orders_on_close') ? 'checked' : ''}></label>
+      <div class="grp">Symbol</div>
+      <label class="row-field" for="pr_pv"><span>Point value (currency per point per contract)</span><input class="field" type="number" id="pr_pv" value="${state.spec.pointvalue}" min="0" step="any"></label>
+      <label class="row-field" for="pr_tick"><span>Tick size (syminfo.mintick)</span><input class="field" type="number" id="pr_tick" value="${state.spec.mintick || res.mintick}" min="0" step="any"></label>
+      <p class="hint">Futures need these to match the contract: MNQ is $2 per point with a 0.25 tick, NQ $20, MES $5, ES $50. They fill in automatically when the file or symbol name contains the contract code.</p>
       <p class="hint">These override the values in the script's <code>strategy()</code> call, like the Properties tab of a strategy's settings.</p>`;
   }
   $('settingsTitle').textContent = res ? `${res.title} settings` : 'Settings';
@@ -630,6 +714,11 @@ function applySettings() {
         pyramiding: Math.round(+$('pr_pyr').value), commission_value: +$('pr_comm').value, commission_type: $('pr_commt').value,
         slippage: Math.round(+$('pr_slip').value), process_orders_on_close: $('pr_poc').checked,
       };
+      const pv = +$('pr_pv').value;
+      const tick = +$('pr_tick').value;
+      if (pv > 0) state.spec.pointvalue = pv;
+      if (tick > 0 && tick !== state.result.mintick) state.spec.mintick = tick;
+      showDataInfo();
       // keep only values that differ from what the script itself declares
       const declared = res.strategy.declared;
       state.propOverrides = {};
