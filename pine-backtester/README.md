@@ -21,8 +21,11 @@ No install needed. Any one of these:
 * **Local server** (Node 18+), works fully offline:
   ```bash
   cd pine-backtester
+  ```
+  ```bash
   node serve.mjs
   ```
+  (Run them as two separate commands; Windows PowerShell 5.1 doesn't accept `&&`.)
   then open http://localhost:8080/
 * **Command line**, no browser:
   ```bash
