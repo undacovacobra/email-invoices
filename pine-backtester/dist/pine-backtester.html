@@ -1,0 +1,4168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pine Backtester</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a three-zone trading workstation — chart top-left, Pine editor on the
+   right, strategy tester docked under the chart; stacks to one column on phones. */
+:root {
+  --bg: #eef1f5;
+  --panel: #ffffff;
+  --panel-2: #f6f8fb;
+  --line: #d9dfe8;
+  --fg: #172030;
+  --muted: #5d6a7d;
+  --accent: #a85a06;
+  --accent-ink: #ffffff;
+  --up: #0e8f7e;
+  --down: #d23f48;
+  --buy: #2c63d8;
+  --sell: #d23f48;
+  --code-kw: #8a3ffc;
+  --code-fn: #1f6fb8;
+  --code-str: #1d7a48;
+  --code-num: #b5550a;
+  --code-cmt: #8590a2;
+  --focus: #2c63d8;
+  --font-ui: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --fs-xs: 0.72rem;
+  --fs-sm: 0.8rem;
+  --fs-md: 0.875rem;
+  --fs-lg: 1.05rem;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e131a; --panel: #141b24; --panel-2: #1a2330; --line: #263241; --fg: #dbe2eb; --muted: #8592a5;
+    --accent: #f0a93b; --accent-ink: #1b1204; --up: #26a69a; --down: #ef5350; --buy: #4c8dff; --sell: #ef5350;
+    --code-kw: #c49bff; --code-fn: #79b8ff; --code-str: #85d49c; --code-num: #f2b56b; --code-cmt: #66748a; --focus: #4c8dff;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e131a; --panel: #141b24; --panel-2: #1a2330; --line: #263241; --fg: #dbe2eb; --muted: #8592a5;
+  --accent: #f0a93b; --accent-ink: #1b1204; --up: #26a69a; --down: #ef5350; --buy: #4c8dff; --sell: #ef5350;
+  --code-kw: #c49bff; --code-fn: #79b8ff; --code-str: #85d49c; --code-num: #f2b56b; --code-cmt: #66748a; --focus: #4c8dff;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: var(--fs-md)/1.4 var(--font-ui);
+}
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+.app {
+  display: flex; flex-direction: column; height: 100%;
+  padding-block: 0 12px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+/* ---------- top bar ---------- */
+.topbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding-block: 10px;
+}
+.brand { font-family: var(--font-mono); font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
+.brand b { color: var(--accent); font-weight: 600; }
+.ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ctl label { font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.field, .btn {
+  height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel-2);
+}
+.field { min-width: 0; }
+input.field[type="number"] { width: 6.5em; }
+#symbol { width: 8.5em; text-transform: uppercase; }
+.btn { cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.ghost { background: transparent; }
+.file-btn input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.file-btn { position: relative; }
+.data-info { font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
+.spacer { flex: 1; }
+
+/* ---------- workspace grid ---------- */
+.workspace {
+  flex: 1; min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 36%);
+  grid-template-rows: minmax(0, 1fr) minmax(230px, 40%);
+  grid-template-areas: "chart editor" "tester editor";
+  border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+}
+.chart-area { grid-area: chart; position: relative; min-width: 0; min-height: 0; background: var(--panel); }
+#chart { position: absolute; inset: 0; }
+.legend {
+  position: absolute; top: 8px; left: 12px; z-index: 3; pointer-events: none;
+  font: var(--fs-xs)/1.5 var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums;
+  display: flex; flex-direction: column; gap: 1px; max-width: calc(100% - 90px);
+}
+.legend .t { color: var(--fg); font-weight: 600; font-family: var(--font-ui); font-size: var(--fs-sm); }
+.legend .row { display: flex; flex-wrap: wrap; gap: 0 10px; }
+.legend .up { color: var(--up); } .legend .dn { color: var(--down); }
+
+/* ---------- editor ---------- */
+.editor-pane {
+  grid-area: editor; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  border-left: 1px solid var(--line); background: var(--panel);
+}
+.pane-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.pane-title { font-weight: 600; font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.editor { flex: 1; min-height: 0; display: flex; position: relative; background: var(--panel-2); }
+.gutter {
+  flex: none; width: 3.4em; padding: 10px 8px 10px 0; overflow: hidden; text-align: right;
+  font: 12.5px/1.55 var(--font-mono); color: var(--code-cmt); user-select: none;
+  border-right: 1px solid var(--line);
+}
+.gutter div.err { color: var(--down); font-weight: 700; }
+.code-wrap { position: relative; flex: 1; min-width: 0; }
+.code-wrap pre, .code-wrap textarea {
+  position: absolute; inset: 0; margin: 0; padding: 10px 12px; border: 0;
+  font: 12.5px/1.55 var(--font-mono); tab-size: 4; white-space: pre; overflow: auto;
+}
+.code-wrap pre { pointer-events: none; color: var(--fg); }
+.code-wrap textarea {
+  resize: none; background: transparent; color: transparent; caret-color: var(--fg);
+  outline: none;
+}
+.code-wrap textarea::selection { background: color-mix(in srgb, var(--focus) 35%, transparent); color: transparent; }
+.tk-kw { color: var(--code-kw); }
+.tk-fn { color: var(--code-fn); }
+.tk-str { color: var(--code-str); }
+.tk-num { color: var(--code-num); }
+.tk-cmt { color: var(--code-cmt); font-style: italic; }
+.tk-ns { color: var(--code-fn); opacity: 0.85; }
+.status {
+  padding: 8px 12px; border-top: 1px solid var(--line); font-size: var(--fs-sm);
+  font-family: var(--font-mono); color: var(--muted); min-height: 2.4em; white-space: pre-wrap;
+}
+.status.error { color: var(--down); }
+.status.ok::before { content: "●"; color: var(--up); margin-right: 6px; }
+
+/* ---------- strategy tester ---------- */
+.tester {
+  grid-area: tester; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  border-top: 1px solid var(--line); background: var(--panel);
+}
+.tabs { display: flex; align-items: stretch; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tabs button {
+  border: 0; background: none; padding: 8px 10px; cursor: pointer; white-space: nowrap;
+  color: var(--muted); border-bottom: 2px solid transparent; font-size: var(--fs-sm);
+}
+.tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+.tabs .tester-title { margin-left: auto; align-self: center; font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; padding-left: 12px; }
+.tab-body { flex: 1; min-height: 0; overflow: auto; }
+#tab-overview { display: flex; flex-direction: column; }
+#tab-overview[hidden] { display: none !important; }
+.stats { display: flex; flex-wrap: wrap; gap: 0; border-bottom: 1px solid var(--line); }
+.stat { flex: 1 1 auto; padding: 8px 12px; border-right: 1px solid var(--line); min-width: 6.5em; }
+.stat .k { font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.stat .v { font: 600 var(--fs-lg)/1.3 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stat .s { font: var(--fs-xs) var(--font-mono); color: var(--muted); }
+.pos { color: var(--up); } .neg { color: var(--down); }
+.equity-wrap { position: relative; flex: 1; min-height: 140px; }
+#equityChart { position: absolute; inset: 0; }
+.equity-opts { position: absolute; top: 6px; left: 12px; z-index: 3; font-size: var(--fs-xs); color: var(--muted); display: flex; gap: 12px; }
+.equity-opts label { display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
+.empty { padding: 24px 16px; color: var(--muted); }
+
+table.grid { border-collapse: collapse; width: 100%; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+table.grid th, table.grid td { padding: 5px 12px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+table.grid th:first-child, table.grid td:first-child { text-align: left; }
+table.grid thead th { position: sticky; top: 0; background: var(--panel-2); color: var(--muted); font-weight: 500; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.05em; z-index: 1; }
+table.grid td.mono { font-family: var(--font-mono); }
+table.grid .sub { display: block; color: var(--muted); font-size: var(--fs-xs); }
+table.trades tbody tr { cursor: pointer; }
+table.trades tbody tr:hover td { background: var(--panel-2); }
+.pill { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: var(--fs-xs); font-weight: 600; }
+.pill.long { color: var(--buy); background: color-mix(in srgb, var(--buy) 14%, transparent); }
+.pill.short { color: var(--sell); background: color-mix(in srgb, var(--sell) 14%, transparent); }
+.pill.open { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.props { padding: 12px 16px; display: grid; grid-template-columns: max-content 1fr; gap: 4px 24px; font-size: var(--fs-sm); }
+.props dt { color: var(--muted); }
+.props dd { margin: 0; font-family: var(--font-mono); }
+
+/* ---------- settings modal ---------- */
+.modal-back {
+  position: fixed; inset: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 60%, transparent);
+  display: flex; align-items: center; justify-content: center;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.modal {
+  width: min(520px, 100%); max-height: min(640px, calc(100% - 32px)); display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 18px 50px rgb(0 0 0 / 0.28);
+}
+.modal header { display: flex; align-items: center; gap: 12px; padding: 12px 16px 0; }
+.modal header h2 { margin: 0; font-size: var(--fs-lg); flex: 1; text-wrap: balance; }
+.modal .tabs { padding: 0 12px; }
+.modal-body { overflow: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+.modal-body .grp { font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; padding-top: 6px; }
+.row-field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); align-items: center; gap: 12px; }
+.row-field > span { min-width: 0; }
+.row-field .field { width: 100%; }
+.row-field input[type="checkbox"] { justify-self: start; width: 18px; height: 18px; }
+.modal footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+.hint { font-size: var(--fs-xs); color: var(--muted); }
+
+/* ---------- narrow screens ---------- */
+@media (max-width: 900px) {
+  html, body { height: auto; }
+  .app { height: auto; }
+  .workspace {
+    display: flex; flex-direction: column;
+  }
+  .chart-area { height: 62vh; min-height: 320px; }
+  .tester { height: auto; }
+  .tab-body { max-height: 70vh; }
+  .equity-wrap { height: 220px; flex: none; }
+  .editor-pane { border-left: 0; border-top: 1px solid var(--line); height: 520px; }
+  .stat { flex: 1 1 33%; min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand">Pine<b>/</b>Backtester</div>
+    <div class="ctl">
+      <label for="dataSource">Data</label>
+      <select id="dataSource" class="field">
+        <option value="sample">Sample (offline)</option>
+        <option value="binance">Crypto exchange</option>
+        <option value="csv">CSV file</option>
+      </select>
+      <input id="symbol" class="field" value="BTCUSDT" aria-label="Symbol" hidden>
+      <select id="interval" class="field" aria-label="Interval" hidden>
+        <option>1m</option><option>5m</option><option>15m</option><option>30m</option>
+        <option>1h</option><option selected>4h</option><option>1d</option><option>1w</option>
+      </select>
+      <input id="barCount" class="field" type="number" min="100" max="20000" step="100" value="3000" aria-label="Number of bars" hidden>
+      <button id="loadData" class="btn" hidden>Load</button>
+      <label class="btn file-btn" id="csvLabel" hidden>Open CSV…<input type="file" id="csvFile" accept=".csv,.txt,text/csv"></label>
+    </div>
+    <span id="dataInfo" class="data-info"></span>
+    <span class="spacer"></span>
+    <button id="settingsBtn" class="btn" title="Script inputs and strategy properties">Settings</button>
+    <button id="runBtn" class="btn primary" title="Run the script (Ctrl/⌘ + Enter)">Run</button>
+  </header>
+
+  <main class="workspace">
+    <section class="chart-area" aria-label="Chart">
+      <div id="chart"></div>
+      <div id="legend" class="legend"></div>
+    </section>
+
+    <aside class="editor-pane" aria-label="Pine editor">
+      <div class="pane-head">
+        <span class="pane-title">Pine Editor</span>
+        <span class="spacer"></span>
+        <select id="examples" class="field" aria-label="Load an example script">
+          <option value="">Examples…</option>
+        </select>
+      </div>
+      <div class="editor">
+        <div id="gutter" class="gutter" aria-hidden="true"></div>
+        <div class="code-wrap">
+          <pre id="highlight" aria-hidden="true"></pre>
+          <textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-label="Pine Script source"></textarea>
+        </div>
+      </div>
+      <div id="status" class="status" role="status"></div>
+    </aside>
+
+    <section class="tester" aria-label="Strategy tester">
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+        <button role="tab" data-tab="performance" aria-selected="false">Performance Summary</button>
+        <button role="tab" data-tab="trades" aria-selected="false">List of Trades</button>
+        <button role="tab" data-tab="properties" aria-selected="false">Properties</button>
+        <span id="testerTitle" class="tester-title"></span>
+      </nav>
+      <div id="tab-overview" class="tab-body">
+        <div id="stats" class="stats"></div>
+        <div class="equity-wrap">
+          <div class="equity-opts">
+            <label><input type="checkbox" id="showBH" checked> Buy &amp; hold</label>
+          </div>
+          <div id="equityChart"></div>
+        </div>
+      </div>
+      <div id="tab-performance" class="tab-body" hidden></div>
+      <div id="tab-trades" class="tab-body" hidden></div>
+      <div id="tab-properties" class="tab-body" hidden></div>
+    </section>
+  </main>
+
+  <div id="settingsModal" class="modal-back" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <header>
+        <h2 id="settingsTitle">Settings</h2>
+        <button class="btn ghost" id="settingsClose" aria-label="Close">✕</button>
+      </header>
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-stab="inputs" aria-selected="true">Inputs</button>
+        <button role="tab" data-stab="props" aria-selected="false">Properties</button>
+      </nav>
+      <div id="stab-inputs" class="modal-body"></div>
+      <div id="stab-props" class="modal-body" hidden></div>
+      <footer>
+        <button class="btn" id="settingsReset">Reset to script defaults</button>
+        <button class="btn primary" id="settingsApply">Apply</button>
+      </footer>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
+<script type="module">
+const __m_lexer = (() => {
+// Pine Script tokenizer.
+//
+// Pine is indentation-sensitive (4 spaces or a tab per block level) and lets a
+// statement wrap onto following lines when they are indented by an amount that
+// is NOT a multiple of 4, or while a bracket is still open. This lexer first
+// joins wrapped lines into logical lines, then tokenizes each one and emits
+// Python-style INDENT / DEDENT / NEWLINE tokens.
+
+class PineSyntaxError extends Error {
+  constructor(message, line, col) {
+    super(line ? `line ${line}: ${message}` : message);
+    this.name = 'PineSyntaxError';
+    this.line = line;
+    this.col = col;
+  }
+}
+
+const KEYWORDS = new Set([
+  'if', 'else', 'for', 'to', 'by', 'in', 'while', 'var', 'varip', 'and', 'or', 'not',
+  'true', 'false', 'break', 'continue', 'switch', 'import', 'export', 'method', 'type',
+]);
+
+const OPERATORS = [
+  ':=', '=>', '==', '!=', '<=', '>=', '+=', '-=', '*=', '/=', '%=',
+  '+', '-', '*', '/', '%', '<', '>', '=', '?', ':', ',', '(', ')', '[', ']', '.',
+];
+
+function stripComment(line) {
+  let quote = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === '/' && line[i + 1] === '/') {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
+function indentWidth(line) {
+  let w = 0;
+  for (const c of line) {
+    if (c === ' ') w += 1;
+    else if (c === '\t') w += 4;
+    else break;
+  }
+  return w;
+}
+
+function bracketDelta(text) {
+  let d = 0;
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") quote = c;
+    else if (c === '(' || c === '[') d++;
+    else if (c === ')' || c === ']') d--;
+  }
+  return d;
+}
+
+// Returns [{ text, line, indent }] where wrapped lines are joined.
+function logicalLines(source) {
+  const raw = source.replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  let depth = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const text = stripComment(raw[i]).replace(/\s+$/, '');
+    if (!text.trim()) continue;
+    const indent = indentWidth(text);
+    const prev = out[out.length - 1];
+    const isContinuation = prev && (depth > 0 || indent % 4 !== 0);
+    if (isContinuation) {
+      prev.text += ' ' + text.trim();
+    } else {
+      out.push({ text: text.trim(), line: i + 1, indent });
+    }
+    depth += bracketDelta(text);
+    if (depth < 0) depth = 0;
+  }
+  return out;
+}
+
+function tokenizeLine(text, line, tokens) {
+  let i = 0;
+  const push = (type, value, col) => tokens.push({ type, value, line, col: col + 1 });
+  while (i < text.length) {
+    const c = text[i];
+    if (c === ' ' || c === '\t') { i++; continue; }
+    const start = i;
+    // number
+    if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(text[i + 1] || ''))) {
+      const m = /^(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/.exec(text.slice(i));
+      push('number', parseFloat(m[0]), start);
+      i += m[0].length;
+      continue;
+    }
+    // string
+    if (c === '"' || c === "'") {
+      let j = i + 1;
+      let s = '';
+      while (j < text.length && text[j] !== c) {
+        if (text[j] === '\\' && j + 1 < text.length) {
+          const n = text[j + 1];
+          s += n === 'n' ? '\n' : n === 't' ? '\t' : n;
+          j += 2;
+        } else s += text[j++];
+      }
+      if (j >= text.length) throw new PineSyntaxError('unterminated string', line, start);
+      push('string', s, start);
+      i = j + 1;
+      continue;
+    }
+    // color literal
+    if (c === '#') {
+      const m = /^#([0-9a-fA-F]{8}|[0-9a-fA-F]{6})\b/.exec(text.slice(i));
+      if (!m) throw new PineSyntaxError('bad color literal', line, start);
+      push('color', m[0], start);
+      i += m[0].length;
+      continue;
+    }
+    // identifier / keyword
+    if (/[A-Za-z_]/.test(c)) {
+      const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(i));
+      push(KEYWORDS.has(m[0]) ? 'kw' : 'ident', m[0], start);
+      i += m[0].length;
+      continue;
+    }
+    const op = OPERATORS.find((o) => text.startsWith(o, i));
+    if (op) {
+      push('op', op, start);
+      i += op.length;
+      continue;
+    }
+    throw new PineSyntaxError(`unexpected character '${c}'`, line, start);
+  }
+}
+
+function tokenize(source) {
+  const tokens = [];
+  const stack = [0];
+  for (const ll of logicalLines(source)) {
+    const level = ll.indent;
+    if (level > stack[stack.length - 1]) {
+      stack.push(level);
+      tokens.push({ type: 'indent', line: ll.line, col: 1 });
+    } else {
+      while (level < stack[stack.length - 1]) {
+        stack.pop();
+        tokens.push({ type: 'dedent', line: ll.line, col: 1 });
+      }
+      if (level !== stack[stack.length - 1]) {
+        throw new PineSyntaxError('inconsistent indentation', ll.line, 1);
+      }
+    }
+    tokenizeLine(ll.text, ll.line, tokens);
+    tokens.push({ type: 'newline', line: ll.line, col: ll.text.length + 1 });
+  }
+  while (stack.length > 1) {
+    stack.pop();
+    tokens.push({ type: 'dedent', line: 0, col: 0 });
+  }
+  tokens.push({ type: 'eof', line: 0, col: 0 });
+  return tokens;
+}
+
+return { PineSyntaxError, tokenize };
+})();
+
+const __m_parser = (() => {
+// Pine Script parser: tokens -> AST.
+const { tokenize, PineSyntaxError } = __m_lexer;
+const TYPE_NAMES = new Set([
+  'int', 'float', 'bool', 'string', 'color', 'line', 'label', 'box', 'table',
+  'linefill', 'polyline', 'array', 'matrix', 'map', 'series', 'simple', 'const',
+]);
+
+function parse(source) {
+  return new Parser(tokenize(source)).parseProgram();
+}
+
+class Parser {
+  constructor(tokens) {
+    this.t = tokens;
+    this.i = 0;
+    this.nextId = 1;
+  }
+
+  // ---- helpers ----------------------------------------------------------
+  peek(o = 0) { return this.t[this.i + o]; }
+  at(type, value, o = 0) {
+    const tk = this.t[this.i + o];
+    return tk && tk.type === type && (value === undefined || tk.value === value);
+  }
+  atOp(v, o = 0) { return this.at('op', v, o); }
+  atKw(v, o = 0) { return this.at('kw', v, o); }
+  next() { return this.t[this.i++]; }
+  fail(msg, tk = this.peek()) {
+    throw new PineSyntaxError(msg, tk && tk.line, tk && tk.col);
+  }
+  expect(type, value) {
+    if (!this.at(type, value)) {
+      const tk = this.peek();
+      const got = tk.type === 'newline' ? 'end of line' : tk.value ?? tk.type;
+      this.fail(`expected '${value ?? type}' but found '${got}'`);
+    }
+    return this.next();
+  }
+  node(type, tk, props) {
+    return { type, id: this.nextId++, line: tk ? tk.line : 0, ...props };
+  }
+
+  // ---- program / blocks -------------------------------------------------
+  parseProgram() {
+    const body = [];
+    while (!this.at('eof')) {
+      if (this.at('newline')) { this.next(); continue; }
+      body.push(this.parseStatement());
+    }
+    return { type: 'Program', body, nodeCount: this.nextId };
+  }
+
+  parseBlock() {
+    const tk = this.peek();
+    this.expect('newline');
+    if (!this.at('indent')) this.fail('expected an indented block');
+    this.next();
+    const body = [];
+    while (!this.at('dedent') && !this.at('eof')) {
+      if (this.at('newline')) { this.next(); continue; }
+      body.push(this.parseStatement());
+    }
+    if (this.at('dedent')) this.next();
+    return this.node('Block', tk, { body });
+  }
+
+  endStatement() {
+    if (this.at('newline')) this.next();
+    else if (!this.at('dedent') && !this.at('eof')) {
+      const tk = this.peek();
+      this.fail(`unexpected '${tk.value ?? tk.type}'`);
+    }
+  }
+
+  // ---- statements -------------------------------------------------------
+  parseStatement() {
+    const tk = this.peek();
+    if (tk.type === 'kw') {
+      switch (tk.value) {
+        case 'if': { const n = this.parseIf(); return n; }
+        case 'for': return this.parseFor();
+        case 'while': return this.parseWhile();
+        case 'switch': return this.parseSwitch();
+        case 'break': this.next(); this.endStatement(); return this.node('Break', tk, {});
+        case 'continue': this.next(); this.endStatement(); return this.node('Continue', tk, {});
+        case 'var': case 'varip': return this.parseDecl();
+        case 'export': this.next(); return this.parseStatement();
+        case 'method': this.next(); return this.parseStatement();
+        case 'import': this.fail('import of libraries is not supported');
+        // eslint-disable-next-line no-fallthrough
+        case 'type': this.fail('user-defined types are not supported yet');
+        default: break;
+      }
+    }
+    if (this.atOp('[') && this.isTupleDecl()) return this.parseTupleDecl();
+    if (tk.type === 'ident') {
+      if (this.atOp('(', 1) && this.isFuncDef()) return this.parseFuncDef();
+      if (this.isTypedDecl() || this.atOp('=', 1)) return this.parseDecl();
+      if (this.at('op', undefined, 1) && [':=', '+=', '-=', '*=', '/=', '%='].includes(this.peek(1).value)) {
+        const name = this.next().value;
+        const op = this.next().value;
+        const value = this.parseRhs();
+        return this.node('Assign', tk, { name, op, value });
+      }
+    }
+    const expr = this.parseExpression();
+    this.endStatement();
+    return this.node('ExprStmt', tk, { expr });
+  }
+
+  // Right-hand side of a declaration/assignment: expression, or if/switch expression.
+  parseRhs() {
+    if (this.atKw('if')) return this.parseIf();
+    if (this.atKw('switch')) return this.parseSwitch();
+    const e = this.parseExpression();
+    this.endStatement();
+    return e;
+  }
+
+  // Lookahead helpers
+  matchingClose(openIdx) {
+    let depth = 0;
+    for (let j = openIdx; j < this.t.length; j++) {
+      const tk = this.t[j];
+      if (tk.type === 'op' && (tk.value === '(' || tk.value === '[')) depth++;
+      else if (tk.type === 'op' && (tk.value === ')' || tk.value === ']')) {
+        depth--;
+        if (depth === 0) return j;
+      } else if (tk.type === 'newline' || tk.type === 'eof') return -1;
+    }
+    return -1;
+  }
+  isTupleDecl() {
+    const close = this.matchingClose(this.i);
+    const after = close >= 0 && this.t[close + 1];
+    return !!after && after.type === 'op' && (after.value === '=' || after.value === ':=');
+  }
+  isFuncDef() {
+    const close = this.matchingClose(this.i + 1);
+    const after = close >= 0 && this.t[close + 1];
+    return !!after && after.type === 'op' && after.value === '=>';
+  }
+  // [series|simple|const] type[<...>] name =
+  isTypedDecl() {
+    let j = this.i;
+    const tk = () => this.t[j];
+    if (tk().type !== 'ident' || !TYPE_NAMES.has(tk().value)) return false;
+    if (['series', 'simple', 'const'].includes(tk().value) && this.t[j + 1].type === 'ident') j++;
+    j++;
+    if (this.t[j].type === 'op' && this.t[j].value === '<') {
+      while (this.t[j] && !(this.t[j].type === 'op' && this.t[j].value === '>')) j++;
+      j++;
+    }
+    if (this.t[j].type === 'op' && this.t[j].value === '[' && this.t[j + 1].value === ']') j += 2;
+    return this.t[j].type === 'ident' && this.t[j + 1].type === 'op' && this.t[j + 1].value === '=';
+  }
+  skipType() {
+    let type = null;
+    if (this.isTypeStart()) {
+      if (['series', 'simple', 'const'].includes(this.peek().value) && this.at('ident', undefined, 1)) this.next();
+      type = this.next().value;
+      if (this.atOp('<')) {
+        while (!this.atOp('>')) this.next();
+        this.next();
+      }
+      if (this.atOp('[') && this.atOp(']', 1)) { this.next(); this.next(); }
+    }
+    return type;
+  }
+  isTypeStart() {
+    return this.at('ident') && TYPE_NAMES.has(this.peek().value) &&
+      (this.at('ident', undefined, 1) || this.atOp('<', 1) || (this.atOp('[', 1) && this.atOp(']', 2)));
+  }
+
+  parseDecl() {
+    const tk = this.peek();
+    let mode = null;
+    if (this.atKw('var') || this.atKw('varip')) mode = this.next().value;
+    const varType = this.skipType();
+    const name = this.expect('ident').value;
+    this.expect('op', '=');
+    const init = this.parseRhs();
+    return this.node('VarDecl', tk, { name, mode, varType, init });
+  }
+
+  parseTupleDecl() {
+    const tk = this.next(); // [
+    const names = [];
+    while (!this.atOp(']')) {
+      names.push(this.expect('ident').value);
+      if (this.atOp(',')) this.next();
+    }
+    this.next();
+    const op = this.next().value; // = or :=
+    const init = this.parseRhs();
+    return this.node('TupleDecl', tk, { names, init, reassign: op === ':=' });
+  }
+
+  parseFuncDef() {
+    const tk = this.peek();
+    const name = this.next().value;
+    this.expect('op', '(');
+    const params = [];
+    while (!this.atOp(')')) {
+      this.skipType();
+      const pname = this.expect('ident').value;
+      let def = null;
+      if (this.atOp('=')) { this.next(); def = this.parseExpression(); }
+      params.push({ name: pname, def });
+      if (this.atOp(',')) this.next();
+    }
+    this.next();
+    this.expect('op', '=>');
+    let body;
+    if (this.at('newline')) body = this.parseBlock();
+    else {
+      const e = this.parseExpression();
+      this.endStatement();
+      body = this.node('Block', tk, { body: [this.node('ExprStmt', tk, { expr: e })] });
+    }
+    return this.node('FuncDef', tk, { name, params, body });
+  }
+
+  parseIf() {
+    const tk = this.expect('kw', 'if');
+    const test = this.parseExpression();
+    const consequent = this.parseBlock();
+    let alternate = null;
+    if (this.atKw('else')) {
+      this.next();
+      if (this.atKw('if')) alternate = this.parseIf();
+      else alternate = this.parseBlock();
+    }
+    return this.node('If', tk, { test, consequent, alternate });
+  }
+
+  parseFor() {
+    const tk = this.expect('kw', 'for');
+    if (this.atOp('[')) {
+      this.next();
+      const a = this.expect('ident').value;
+      this.expect('op', ',');
+      const b = this.expect('ident').value;
+      this.expect('op', ']');
+      this.expect('kw', 'in');
+      const iterable = this.parseExpression();
+      const body = this.parseBlock();
+      return this.node('ForIn', tk, { index: a, item: b, iterable, body });
+    }
+    const v = this.expect('ident').value;
+    if (this.atKw('in')) {
+      this.next();
+      const iterable = this.parseExpression();
+      const body = this.parseBlock();
+      return this.node('ForIn', tk, { index: null, item: v, iterable, body });
+    }
+    this.expect('op', '=');
+    const from = this.parseExpression();
+    this.expect('kw', 'to');
+    const to = this.parseExpression();
+    let step = null;
+    if (this.atKw('by')) { this.next(); step = this.parseExpression(); }
+    const body = this.parseBlock();
+    return this.node('For', tk, { var: v, from, to, step, body });
+  }
+
+  parseWhile() {
+    const tk = this.expect('kw', 'while');
+    const test = this.parseExpression();
+    const body = this.parseBlock();
+    return this.node('While', tk, { test, body });
+  }
+
+  parseSwitch() {
+    const tk = this.expect('kw', 'switch');
+    let discriminant = null;
+    if (!this.at('newline')) discriminant = this.parseExpression();
+    this.expect('newline');
+    this.expect('indent');
+    const cases = [];
+    while (!this.at('dedent') && !this.at('eof')) {
+      if (this.at('newline')) { this.next(); continue; }
+      const ctk = this.peek();
+      let test = null;
+      if (!this.atOp('=>')) test = this.parseExpression();
+      this.expect('op', '=>');
+      let body;
+      if (this.at('newline')) body = this.parseBlock();
+      else {
+        const stmtTk = this.peek();
+        const stmt = this.parseStatement();
+        body = this.node('Block', stmtTk, { body: [stmt] });
+      }
+      cases.push({ test, body, line: ctk.line });
+    }
+    if (this.at('dedent')) this.next();
+    return this.node('Switch', tk, { discriminant, cases });
+  }
+
+  // ---- expressions ------------------------------------------------------
+  parseExpression() { return this.parseTernary(); }
+
+  parseTernary() {
+    const test = this.parseOr();
+    if (this.atOp('?')) {
+      const tk = this.next();
+      const cons = this.parseTernary();
+      this.expect('op', ':');
+      const alt = this.parseTernary();
+      return this.node('Ternary', tk, { test, cons, alt });
+    }
+    return test;
+  }
+
+  parseOr() {
+    let left = this.parseAnd();
+    while (this.atKw('or')) {
+      const tk = this.next();
+      left = this.node('Logical', tk, { op: 'or', left, right: this.parseAnd() });
+    }
+    return left;
+  }
+
+  parseAnd() {
+    let left = this.parseEquality();
+    while (this.atKw('and')) {
+      const tk = this.next();
+      left = this.node('Logical', tk, { op: 'and', left, right: this.parseEquality() });
+    }
+    return left;
+  }
+
+  parseEquality() {
+    let left = this.parseComparison();
+    while (this.atOp('==') || this.atOp('!=')) {
+      const tk = this.next();
+      left = this.node('Binary', tk, { op: tk.value, left, right: this.parseComparison() });
+    }
+    return left;
+  }
+
+  parseComparison() {
+    let left = this.parseAdditive();
+    while (['<', '>', '<=', '>='].some((o) => this.atOp(o))) {
+      const tk = this.next();
+      left = this.node('Binary', tk, { op: tk.value, left, right: this.parseAdditive() });
+    }
+    return left;
+  }
+
+  parseAdditive() {
+    let left = this.parseMultiplicative();
+    while (this.atOp('+') || this.atOp('-')) {
+      const tk = this.next();
+      left = this.node('Binary', tk, { op: tk.value, left, right: this.parseMultiplicative() });
+    }
+    return left;
+  }
+
+  parseMultiplicative() {
+    let left = this.parseUnary();
+    while (this.atOp('*') || this.atOp('/') || this.atOp('%')) {
+      const tk = this.next();
+      left = this.node('Binary', tk, { op: tk.value, left, right: this.parseUnary() });
+    }
+    return left;
+  }
+
+  parseUnary() {
+    if (this.atOp('-') || this.atOp('+') || this.atKw('not')) {
+      const tk = this.next();
+      return this.node('Unary', tk, { op: tk.value, arg: this.parseUnary() });
+    }
+    return this.parsePostfix();
+  }
+
+  parsePostfix() {
+    let expr = this.parsePrimary();
+    for (;;) {
+      if (this.atOp('[')) {
+        const tk = this.next();
+        const offset = this.parseExpression();
+        this.expect('op', ']');
+        expr = this.node('History', tk, { target: expr, offset });
+      } else if (this.atOp('.') && (this.at('ident', undefined, 1) || this.at('kw', undefined, 1))) {
+        // member/method on an expression result, e.g. array.get(a, 0).abs() — treat as method call
+        const tk = this.next();
+        const name = this.next().value;
+        if (!this.atOp('(')) this.fail(`field access '.${name}' is not supported`, tk);
+        const call = this.parseCallArgs(name, tk);
+        call.args.unshift(expr);
+        call.method = true;
+        expr = call;
+      } else break;
+    }
+    return expr;
+  }
+
+  parseCallArgs(callee, tk) {
+    this.expect('op', '(');
+    const args = [];
+    const named = {};
+    while (!this.atOp(')')) {
+      if (this.at('ident') && this.atOp('=', 1)) {
+        const name = this.next().value;
+        this.next();
+        named[name] = this.parseExpression();
+      } else {
+        args.push(this.parseExpression());
+      }
+      if (this.atOp(',')) this.next();
+      else if (!this.atOp(')')) this.fail("expected ',' or ')' in argument list");
+    }
+    this.next();
+    return this.node('Call', tk, { callee, args, named });
+  }
+
+  parsePrimary() {
+    const tk = this.peek();
+    switch (tk.type) {
+      case 'number': this.next(); return this.node('Num', tk, { value: tk.value });
+      case 'string': this.next(); return this.node('Str', tk, { value: tk.value });
+      case 'color': this.next(); return this.node('Color', tk, { value: tk.value });
+      case 'kw':
+        if (tk.value === 'true' || tk.value === 'false') {
+          this.next();
+          return this.node('Bool', tk, { value: tk.value === 'true' });
+        }
+        if (tk.value === 'if') return this.parseIf();
+        if (tk.value === 'switch') return this.parseSwitch();
+        break;
+      case 'op':
+        if (tk.value === '(') {
+          this.next();
+          const e = this.parseExpression();
+          this.expect('op', ')');
+          return e;
+        }
+        if (tk.value === '[') {
+          this.next();
+          const items = [];
+          while (!this.atOp(']')) {
+            items.push(this.parseExpression());
+            if (this.atOp(',')) this.next();
+          }
+          this.next();
+          return this.node('Tuple', tk, { items });
+        }
+        break;
+      case 'ident': {
+        this.next();
+        let name = tk.value;
+        while (this.atOp('.') && (this.at('ident', undefined, 1) || this.at('kw', undefined, 1))) {
+          this.next();
+          name += '.' + this.next().value;
+        }
+        // generic call: array.new<float>(...)
+        if (this.atOp('<') && this.at('ident', undefined, 1) && this.atOp('>', 2) && this.atOp('(', 3)) {
+          this.next(); this.next(); this.next();
+        }
+        if (this.atOp('(')) return this.parseCallArgs(name, tk);
+        return this.node('Ident', tk, { name });
+      }
+      default: break;
+    }
+    const got = tk.type === 'newline' ? 'end of line' : tk.value ?? tk.type;
+    this.fail(`unexpected '${got}'`);
+  }
+}
+
+return { parse };
+})();
+
+const __m_ta = (() => {
+// ta.* built-ins.
+//
+// Every call site of a ta function gets its own state (exactly like Pine), keyed
+// by `key`. State is stored in arrays indexed by bar so that re-evaluating a call
+// on the same bar overwrites instead of double-counting. Formulas follow the
+// reference implementations in the Pine Script manual so results line up with
+// what TradingView shows.
+
+const isNa = (v) => v === null || v === undefined || (typeof v === 'number' && Number.isNaN(v));
+const num = (v) => (isNa(v) ? NaN : +v);
+
+function st(rt, key) {
+  let s = rt.taState.get(key);
+  if (!s) { s = {}; rt.taState.set(key, s); }
+  return s;
+}
+function put(s, name, bar, v) {
+  const a = s[name] || (s[name] = []);
+  a[bar] = v;
+  return a;
+}
+const at = (a, i) => (i < 0 || a[i] === undefined ? NaN : a[i]);
+
+function windowVals(a, bar, len) {
+  if (!(len >= 1) || bar - len + 1 < 0) return null;
+  const out = new Array(len);
+  for (let k = 0; k < len; k++) {
+    const v = a[bar - k];
+    if (isNa(v)) return null;
+    out[k] = v; // out[0] = current, out[k] = k bars ago
+  }
+  return out;
+}
+
+// ---- primitives usable by composites ------------------------------------
+function sma(rt, key, src, len) {
+  len = Math.round(num(len));
+  const s = st(rt, key);
+  const a = put(s, 'src', rt.bar, num(src));
+  const w = windowVals(a, rt.bar, len);
+  if (!w) return NaN;
+  let sum = 0;
+  for (const v of w) sum += v;
+  return sum / len;
+}
+
+function smoothed(rt, key, src, len, alpha) {
+  const s = st(rt, key);
+  const a = put(s, 'src', rt.bar, num(src));
+  const out = s.out || (s.out = []);
+  const prev = at(out, rt.bar - 1);
+  let v;
+  if (isNa(prev)) {
+    const w = windowVals(a, rt.bar, len);
+    v = w ? w.reduce((x, y) => x + y, 0) / len : NaN;
+  } else {
+    v = alpha * num(src) + (1 - alpha) * prev;
+  }
+  out[rt.bar] = v;
+  return v;
+}
+function ema(rt, key, src, len) {
+  len = Math.round(num(len));
+  return smoothed(rt, key, src, len, 2 / (len + 1));
+}
+function rma(rt, key, src, len) {
+  len = Math.round(num(len));
+  return smoothed(rt, key, src, len, 1 / len);
+}
+function wma(rt, key, src, len) {
+  len = Math.round(num(len));
+  const a = put(st(rt, key), 'src', rt.bar, num(src));
+  const w = windowVals(a, rt.bar, len);
+  if (!w) return NaN;
+  let norm = 0, sum = 0;
+  for (let k = 0; k < len; k++) {
+    const weight = len - k;
+    norm += weight;
+    sum += w[k] * weight;
+  }
+  return sum / norm;
+}
+function stdevImpl(rt, key, src, len, biased = true) {
+  len = Math.round(num(len));
+  const a = put(st(rt, key), 'src', rt.bar, num(src));
+  const w = windowVals(a, rt.bar, len);
+  if (!w) return NaN;
+  const mean = w.reduce((x, y) => x + y, 0) / len;
+  let ss = 0;
+  for (const v of w) ss += (v - mean) * (v - mean);
+  return Math.sqrt(ss / (biased ? len : len - 1));
+}
+function trueRange(rt, handleNa) {
+  const b = rt.bar;
+  const h = rt.data.high[b], l = rt.data.low[b];
+  if (b === 0) return handleNa ? h - l : NaN;
+  const pc = rt.data.close[b - 1];
+  return Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+}
+function highestImpl(rt, key, src, len, wantBars, lowest) {
+  len = Math.round(num(len));
+  const a = put(st(rt, key), 'src', rt.bar, num(src));
+  if (rt.bar - len + 1 < 0) return NaN;
+  let best = NaN, bestK = 0;
+  for (let k = 0; k < len; k++) {
+    const v = a[rt.bar - k];
+    if (isNa(v)) continue;
+    if (isNa(best) || (lowest ? v < best : v > best)) { best = v; bestK = k; }
+  }
+  if (isNa(best)) return NaN;
+  return wantBars ? -bestK : best;
+}
+function hist(rt, key, name, v) {
+  return put(st(rt, key), name, rt.bar, v);
+}
+
+const DAY_MS = 86400000;
+
+// ---- the table of exported functions -------------------------------------
+// Each entry: [paramNames, impl(rt, key, ...args)]
+const TA = {
+  sma: [['source', 'length'], (rt, k, s, l) => sma(rt, k, s, l)],
+  ema: [['source', 'length'], (rt, k, s, l) => ema(rt, k, s, l)],
+  rma: [['source', 'length'], (rt, k, s, l) => rma(rt, k, s, l)],
+  wma: [['source', 'length'], (rt, k, s, l) => wma(rt, k, s, l)],
+  vwma: [['source', 'length'], (rt, k, s, l) => {
+    const v = rt.data.volume[rt.bar];
+    return sma(rt, k + '/sv', num(s) * v, l) / sma(rt, k + '/v', v, l);
+  }],
+  swma: [['source'], (rt, k, s) => {
+    const a = hist(rt, k, 'src', num(s));
+    const w = windowVals(a, rt.bar, 4);
+    return w ? (w[3] + 2 * w[2] + 2 * w[1] + w[0]) / 6 : NaN;
+  }],
+  hma: [['source', 'length'], (rt, k, s, l) => {
+    l = Math.round(num(l));
+    const half = wma(rt, k + '/h', s, Math.floor(l / 2));
+    const full = wma(rt, k + '/f', s, l);
+    return wma(rt, k + '/o', 2 * half - full, Math.floor(Math.sqrt(l)));
+  }],
+  alma: [['series', 'length', 'offset', 'sigma', 'floor'], (rt, k, s, l, off = 0.85, sigma = 6, fl = false) => {
+    l = Math.round(num(l));
+    const a = hist(rt, k, 'src', num(s));
+    const w = windowVals(a, rt.bar, l);
+    if (!w) return NaN;
+    const m = fl ? Math.floor(off * (l - 1)) : off * (l - 1);
+    const sd = l / sigma;
+    let norm = 0, sum = 0;
+    for (let i = 0; i < l; i++) {
+      const wt = Math.exp(-((i - m) ** 2) / (2 * sd * sd));
+      norm += wt;
+      sum += w[l - 1 - i] * wt;
+    }
+    return sum / norm;
+  }],
+  rsi: [['source', 'length'], (rt, k, s, l) => {
+    const a = hist(rt, k, 'src', num(s));
+    const prev = at(a, rt.bar - 1);
+    const ch = num(s) - prev;
+    const u = isNa(ch) ? NaN : Math.max(ch, 0);
+    const d = isNa(ch) ? NaN : Math.max(-ch, 0);
+    const ru = rma(rt, k + '/u', u, l);
+    const rd = rma(rt, k + '/d', d, l);
+    if (isNa(ru) || isNa(rd)) return NaN;
+    if (rd === 0) return 100;
+    if (ru === 0) return 0;
+    return 100 - 100 / (1 + ru / rd);
+  }],
+  atr: [['length'], (rt, k, l) => rma(rt, k, trueRange(rt, true), l)],
+  stdev: [['source', 'length', 'biased'], (rt, k, s, l, b = true) => stdevImpl(rt, k, s, l, b)],
+  variance: [['source', 'length', 'biased'], (rt, k, s, l, b = true) => stdevImpl(rt, k, s, l, b) ** 2],
+  dev: [['source', 'length'], (rt, k, s, l) => {
+    l = Math.round(num(l));
+    const a = hist(rt, k, 'src', num(s));
+    const w = windowVals(a, rt.bar, l);
+    if (!w) return NaN;
+    const mean = w.reduce((x, y) => x + y, 0) / l;
+    return w.reduce((x, y) => x + Math.abs(y - mean), 0) / l;
+  }],
+  highest: [['source', 'length'], (rt, k, s, l) => {
+    if (l === undefined) { l = s; s = rt.data.high[rt.bar]; }
+    return highestImpl(rt, k, s, l, false, false);
+  }],
+  lowest: [['source', 'length'], (rt, k, s, l) => {
+    if (l === undefined) { l = s; s = rt.data.low[rt.bar]; }
+    return highestImpl(rt, k, s, l, false, true);
+  }],
+  highestbars: [['source', 'length'], (rt, k, s, l) => {
+    if (l === undefined) { l = s; s = rt.data.high[rt.bar]; }
+    return highestImpl(rt, k, s, l, true, false);
+  }],
+  lowestbars: [['source', 'length'], (rt, k, s, l) => {
+    if (l === undefined) { l = s; s = rt.data.low[rt.bar]; }
+    return highestImpl(rt, k, s, l, true, true);
+  }],
+  crossover: [['source1', 'source2'], (rt, k, a, b) => {
+    const A = hist(rt, k, 'a', num(a)), B = hist(rt, k, 'b', num(b));
+    const pa = at(A, rt.bar - 1), pb = at(B, rt.bar - 1);
+    return num(a) > num(b) && pa <= pb;
+  }],
+  crossunder: [['source1', 'source2'], (rt, k, a, b) => {
+    const A = hist(rt, k, 'a', num(a)), B = hist(rt, k, 'b', num(b));
+    const pa = at(A, rt.bar - 1), pb = at(B, rt.bar - 1);
+    return num(a) < num(b) && pa >= pb;
+  }],
+  cross: [['source1', 'source2'], (rt, k, a, b) => {
+    const A = hist(rt, k, 'a', num(a)), B = hist(rt, k, 'b', num(b));
+    const pa = at(A, rt.bar - 1), pb = at(B, rt.bar - 1);
+    return (num(a) > num(b) && pa <= pb) || (num(a) < num(b) && pa >= pb);
+  }],
+  change: [['source', 'length'], (rt, k, s, l = 1) => {
+    const a = hist(rt, k, 'src', typeof s === 'boolean' ? +s : num(s));
+    const v = a[rt.bar] - at(a, rt.bar - Math.round(num(l)));
+    return typeof s === 'boolean' ? v !== 0 : v;
+  }],
+  mom: [['source', 'length'], (rt, k, s, l) => {
+    const a = hist(rt, k, 'src', num(s));
+    return a[rt.bar] - at(a, rt.bar - Math.round(num(l)));
+  }],
+  roc: [['source', 'length'], (rt, k, s, l) => {
+    const a = hist(rt, k, 'src', num(s));
+    const p = at(a, rt.bar - Math.round(num(l)));
+    return (100 * (a[rt.bar] - p)) / p;
+  }],
+  rising: [['source', 'length'], (rt, k, s, l) => {
+    const a = hist(rt, k, 'src', num(s));
+    for (let i = 1; i <= l; i++) if (!(a[rt.bar] > at(a, rt.bar - i))) return false;
+    return true;
+  }],
+  falling: [['source', 'length'], (rt, k, s, l) => {
+    const a = hist(rt, k, 'src', num(s));
+    for (let i = 1; i <= l; i++) if (!(a[rt.bar] < at(a, rt.bar - i))) return false;
+    return true;
+  }],
+  cum: [['source'], (rt, k, s) => {
+    const o = st(rt, k);
+    const out = o.out || (o.out = []);
+    const prev = at(out, rt.bar - 1);
+    const v = (isNa(prev) ? 0 : prev) + (isNa(s) ? 0 : num(s));
+    out[rt.bar] = v;
+    return v;
+  }],
+  macd: [['source', 'fastlen', 'slowlen', 'siglen'], (rt, k, s, f, sl, sg) => {
+    const m = ema(rt, k + '/f', s, f) - ema(rt, k + '/s', s, sl);
+    const sig = ema(rt, k + '/g', m, sg);
+    return [m, sig, m - sig];
+  }],
+  bb: [['series', 'length', 'mult'], (rt, k, s, l, m) => {
+    const basis = sma(rt, k + '/m', s, l);
+    const dev = num(m) * stdevImpl(rt, k + '/d', s, l, true);
+    return [basis, basis + dev, basis - dev];
+  }],
+  bbw: [['series', 'length', 'mult'], (rt, k, s, l, m) => {
+    const basis = sma(rt, k + '/m', s, l);
+    const dev = num(m) * stdevImpl(rt, k + '/d', s, l, true);
+    return ((basis + dev - (basis - dev)) / basis) * 100;
+  }],
+  kc: [['series', 'length', 'mult', 'useTrueRange'], (rt, k, s, l, m, useTr = true) => {
+    const basis = ema(rt, k + '/m', s, l);
+    const b = rt.bar;
+    const range = useTr ? trueRange(rt, true) : rt.data.high[b] - rt.data.low[b];
+    const r = ema(rt, k + '/r', range, l);
+    return [basis, basis + r * m, basis - r * m];
+  }],
+  stoch: [['source', 'high', 'low', 'length'], (rt, k, s, h, lo, l) => {
+    const hh = highestImpl(rt, k + '/h', h, l, false, false);
+    const ll = highestImpl(rt, k + '/l', lo, l, false, true);
+    return (100 * (num(s) - ll)) / (hh - ll);
+  }],
+  cci: [['source', 'length'], (rt, k, s, l) => {
+    l = Math.round(num(l));
+    const a = hist(rt, k, 'src', num(s));
+    const w = windowVals(a, rt.bar, l);
+    if (!w) return NaN;
+    const mean = w.reduce((x, y) => x + y, 0) / l;
+    const md = w.reduce((x, y) => x + Math.abs(y - mean), 0) / l;
+    return (num(s) - mean) / (0.015 * md);
+  }],
+  mfi: [['series', 'length'], (rt, k, s, l) => {
+    const a = hist(rt, k, 'src', num(s));
+    const vol = rt.data.volume[rt.bar];
+    const ch = num(s) - at(a, rt.bar - 1);
+    const up = isNa(ch) ? NaN : (ch <= 0 ? 0 : vol * num(s));
+    const dn = isNa(ch) ? NaN : (ch >= 0 ? 0 : vol * num(s));
+    const U = hist(rt, k, 'up', up), D = hist(rt, k, 'dn', dn);
+    const wu = windowVals(U, rt.bar, l), wd = windowVals(D, rt.bar, l);
+    if (!wu || !wd) return NaN;
+    const su = wu.reduce((x, y) => x + y, 0), sd = wd.reduce((x, y) => x + y, 0);
+    return 100 - 100 / (1 + su / sd);
+  }],
+  wpr: [['length'], (rt, k, l) => {
+    const hh = highestImpl(rt, k + '/h', rt.data.high[rt.bar], l, false, false);
+    const ll = highestImpl(rt, k + '/l', rt.data.low[rt.bar], l, false, true);
+    return (100 * (rt.data.close[rt.bar] - hh)) / (hh - ll);
+  }],
+  barssince: [['condition'], (rt, k, c) => {
+    const o = st(rt, k);
+    const last = o.last || (o.last = []);
+    let v = at(last, rt.bar - 1);
+    if (c) v = rt.bar;
+    last[rt.bar] = v;
+    return isNa(v) ? NaN : rt.bar - v;
+  }],
+  valuewhen: [['condition', 'source', 'occurrence'], (rt, k, c, s, occ = 0) => {
+    const o = st(rt, k);
+    if (!o.vals) o.vals = [];
+    if (o.lastBar === rt.bar && o.pushed) o.vals.pop();
+    o.lastBar = rt.bar;
+    o.pushed = !!c;
+    if (c) o.vals.push(s);
+    const i = o.vals.length - 1 - Math.round(num(occ));
+    return i >= 0 ? o.vals[i] : NaN;
+  }],
+  pivothigh: [['source', 'leftbars', 'rightbars'], (rt, k, s, lb, rb) => {
+    if (rb === undefined) { rb = lb; lb = s; s = rt.data.high[rt.bar]; }
+    const a = hist(rt, k, 'src', num(s));
+    const c = rt.bar - rb;
+    if (c - lb < 0) return NaN;
+    const v = a[c];
+    if (isNa(v)) return NaN;
+    for (let i = c - lb; i <= rt.bar; i++) {
+      if (i === c) continue;
+      if (isNa(a[i]) || a[i] > v || (i > c && a[i] === v) || (i < c && a[i] === v)) return NaN;
+    }
+    return v;
+  }],
+  pivotlow: [['source', 'leftbars', 'rightbars'], (rt, k, s, lb, rb) => {
+    if (rb === undefined) { rb = lb; lb = s; s = rt.data.low[rt.bar]; }
+    const a = hist(rt, k, 'src', num(s));
+    const c = rt.bar - rb;
+    if (c - lb < 0) return NaN;
+    const v = a[c];
+    if (isNa(v)) return NaN;
+    for (let i = c - lb; i <= rt.bar; i++) {
+      if (i === c) continue;
+      if (isNa(a[i]) || a[i] < v || a[i] === v) return NaN;
+    }
+    return v;
+  }],
+  supertrend: [['factor', 'atrPeriod'], (rt, k, factor, period) => {
+    const b = rt.bar;
+    const o = st(rt, k);
+    const src = (rt.data.high[b] + rt.data.low[b]) / 2;
+    const atrA = put(o, 'atr', b, rma(rt, k + '/atr', trueRange(rt, true), period));
+    const atrV = atrA[b];
+    let upper = src + factor * atrV;
+    let lower = src - factor * atrV;
+    const prevLower = at(o.lower || [], b - 1);
+    const prevUpper = at(o.upper || [], b - 1);
+    const pl = isNa(prevLower) ? 0 : prevLower;
+    const pu = isNa(prevUpper) ? 0 : prevUpper;
+    const prevClose = b > 0 ? rt.data.close[b - 1] : NaN;
+    lower = lower > pl || prevClose < pl ? lower : pl;
+    upper = upper < pu || prevClose > pu ? upper : pu;
+    put(o, 'lower', b, lower);
+    put(o, 'upper', b, upper);
+    const prevSt = at(o.st || [], b - 1);
+    let dir;
+    if (isNa(at(atrA, b - 1))) dir = 1;
+    else if (prevSt === prevUpper) dir = rt.data.close[b] > upper ? -1 : 1;
+    else dir = rt.data.close[b] < lower ? 1 : -1;
+    const stv = dir === -1 ? lower : upper;
+    put(o, 'st', b, stv);
+    return [stv, dir];
+  }],
+  dmi: [['diLength', 'adxSmoothing'], (rt, k, len, sm) => {
+    const b = rt.bar, d = rt.data;
+    const up = b > 0 ? d.high[b] - d.high[b - 1] : NaN;
+    const down = b > 0 ? -(d.low[b] - d.low[b - 1]) : NaN;
+    const plusDM = isNa(up) ? NaN : up > down && up > 0 ? up : 0;
+    const minusDM = isNa(down) ? NaN : down > up && down > 0 ? down : 0;
+    const trur = rma(rt, k + '/tr', trueRange(rt, false), len);
+    const o = st(rt, k);
+    let plus = (100 * rma(rt, k + '/p', plusDM, len)) / trur;
+    let minus = (100 * rma(rt, k + '/m', minusDM, len)) / trur;
+    if (isNa(plus)) plus = at(o.plus || [], b - 1);
+    if (isNa(minus)) minus = at(o.minus || [], b - 1);
+    put(o, 'plus', b, plus);
+    put(o, 'minus', b, minus);
+    const sum = plus + minus;
+    const adx = 100 * rma(rt, k + '/adx', Math.abs(plus - minus) / (sum === 0 ? 1 : sum), sm);
+    return [plus, minus, adx];
+  }],
+  vwap: [['source'], (rt, k, s) => {
+    const b = rt.bar;
+    const o = st(rt, k);
+    const day = Math.floor(rt.data.time[b] / DAY_MS);
+    const pv = num(s === undefined ? (rt.data.high[b] + rt.data.low[b] + rt.data.close[b]) / 3 : s) * rt.data.volume[b];
+    const prevDay = at(o.day || [], b - 1);
+    const reset = prevDay !== day;
+    const cpv = (reset ? 0 : at(o.pv, b - 1)) + pv;
+    const cv = (reset ? 0 : at(o.v, b - 1)) + rt.data.volume[b];
+    put(o, 'day', b, day);
+    put(o, 'pv', b, cpv);
+    put(o, 'v', b, cv);
+    return cpv / cv;
+  }],
+  sar: [['start', 'inc', 'max'], (rt, k, start, inc, max) => {
+    const b = rt.bar, d = rt.data;
+    const o = st(rt, k);
+    const states = o.states || (o.states = []);
+    if (b === 0) { states[0] = null; return NaN; }
+    let { result, maxMin, accel, isBelow } = states[b - 1] || { result: NaN };
+    let isFirstTrendBar = false;
+    if (b === 1) {
+      if (d.close[1] > d.close[0]) { isBelow = true; maxMin = d.high[1]; result = d.low[0]; }
+      else { isBelow = false; maxMin = d.low[1]; result = d.high[0]; }
+      isFirstTrendBar = true;
+      accel = start;
+    }
+    result += accel * (maxMin - result);
+    if (isBelow) {
+      if (result > d.low[b]) {
+        isFirstTrendBar = true; isBelow = false;
+        result = Math.max(d.high[b], maxMin); maxMin = d.low[b]; accel = start;
+      }
+    } else if (result < d.high[b]) {
+      isFirstTrendBar = true; isBelow = true;
+      result = Math.min(d.low[b], maxMin); maxMin = d.high[b]; accel = start;
+    }
+    if (!isFirstTrendBar) {
+      if (isBelow) {
+        if (d.high[b] > maxMin) { maxMin = d.high[b]; accel = Math.min(accel + inc, max); }
+      } else if (d.low[b] < maxMin) { maxMin = d.low[b]; accel = Math.min(accel + inc, max); }
+    }
+    if (isBelow) {
+      result = Math.min(result, d.low[b - 1]);
+      if (b > 1) result = Math.min(result, d.low[b - 2]);
+    } else {
+      result = Math.max(result, d.high[b - 1]);
+      if (b > 1) result = Math.max(result, d.high[b - 2]);
+    }
+    states[b] = { result, maxMin, accel, isBelow };
+    return result;
+  }],
+  linreg: [['source', 'length', 'offset'], (rt, k, s, l, off = 0) => {
+    l = Math.round(num(l));
+    const a = hist(rt, k, 'src', num(s));
+    const w = windowVals(a, rt.bar, l);
+    if (!w) return NaN;
+    let sx = 0, sy = 0, sxy = 0, sxx = 0;
+    for (let i = 0; i < l; i++) {
+      const x = i, y = w[l - 1 - i];
+      sx += x; sy += y; sxy += x * y; sxx += x * x;
+    }
+    const slope = (l * sxy - sx * sy) / (l * sxx - sx * sx);
+    const intercept = (sy - slope * sx) / l;
+    return intercept + slope * (l - 1 - off);
+  }],
+  median: [['source', 'length'], (rt, k, s, l) => {
+    l = Math.round(num(l));
+    const a = hist(rt, k, 'src', num(s));
+    const w = windowVals(a, rt.bar, l);
+    if (!w) return NaN;
+    const srt = [...w].sort((x, y) => x - y);
+    return l % 2 ? srt[(l - 1) / 2] : (srt[l / 2 - 1] + srt[l / 2]) / 2;
+  }],
+  percentrank: [['source', 'length'], (rt, k, s, l) => {
+    l = Math.round(num(l));
+    const a = hist(rt, k, 'src', num(s));
+    if (rt.bar - l < 0) return NaN;
+    let cnt = 0;
+    for (let i = 1; i <= l; i++) if (a[rt.bar - i] <= a[rt.bar]) cnt++;
+    return (100 * cnt) / l;
+  }],
+  correlation: [['source1', 'source2', 'length'], (rt, k, x, y, l) => {
+    l = Math.round(num(l));
+    const A = hist(rt, k, 'a', num(x)), B = hist(rt, k, 'b', num(y));
+    const wa = windowVals(A, rt.bar, l), wb = windowVals(B, rt.bar, l);
+    if (!wa || !wb) return NaN;
+    const ma = wa.reduce((p, q) => p + q, 0) / l, mb = wb.reduce((p, q) => p + q, 0) / l;
+    let cov = 0, va = 0, vb = 0;
+    for (let i = 0; i < l; i++) {
+      cov += (wa[i] - ma) * (wb[i] - mb);
+      va += (wa[i] - ma) ** 2;
+      vb += (wb[i] - mb) ** 2;
+    }
+    return cov / Math.sqrt(va * vb);
+  }],
+  tr: [['handle_na'], (rt, k, h = false) => trueRange(rt, h)],
+};
+
+// fixnan and math.sum need per-call-site state too; they live here.
+function fixnan(rt, key, v) {
+  const o = st(rt, key);
+  const out = o.out || (o.out = []);
+  const r = isNa(v) ? at(out, rt.bar - 1) : v;
+  out[rt.bar] = r;
+  return r;
+}
+function rollingSum(rt, key, s, l) {
+  l = Math.round(num(l));
+  const a = hist(rt, key, 'src', num(s));
+  const w = windowVals(a, rt.bar, l);
+  return w ? w.reduce((x, y) => x + y, 0) : NaN;
+}
+
+return { isNa, sma, ema, rma, wma, trueRange, TA, fixnan, rollingSum };
+})();
+
+const __m_broker = (() => {
+// Strategy broker emulator.
+//
+// Follows the rules TradingView documents for its Strategy Tester:
+//  * The script runs once at the close of each bar. Orders it places are filled
+//    starting on the NEXT bar (market orders at that bar's open), unless
+//    process_orders_on_close=true (or immediately=true on strategy.close*),
+//    in which case market orders fill at the close of the current bar.
+//  * Inside a bar, price is assumed to travel open -> high -> low -> close when
+//    the high is nearer the open than the low, otherwise open -> low -> high ->
+//    close. Limit / stop orders fill where that path first touches them; if the
+//    bar gaps past the level the order fills at the open.
+//  * strategy.entry reverses an opposite position, respects `pyramiding`, and
+//    replaces a pending order with the same id.
+//  * strategy.exit brackets (profit/limit, loss/stop, trailing) are attached to
+//    each open entry and are one-cancels-all per entry.
+
+const DEFAULTS = {
+  initial_capital: 1000000,
+  default_qty_type: 'fixed',
+  default_qty_value: 1,
+  pyramiding: 0,
+  commission_type: 'percent',
+  commission_value: 0,
+  slippage: 0,
+  process_orders_on_close: false,
+  currency: '',
+};
+
+let tradeSeq = 0;
+
+class Broker {
+  constructor(data, mintick, overrides = {}) {
+    this.data = data;
+    this.mintick = mintick;
+    this.overrides = overrides;
+    this.cfg = { ...DEFAULTS, ...overrides };
+    this.orders = []; // pending entry/order (limit/stop) & market orders
+    this.exitRules = new Map();
+    this.open = []; // open trades
+    this.closed = []; // closed trades
+    this.realized = 0;
+    this.commissionPaid = 0;
+    this.seq = 0;
+    this.fills = []; // for chart markers
+    this.equity = [];
+    this.maxDD = 0;
+    this.maxDDPct = 0;
+    this.maxRunup = 0;
+    this.peak = null;
+    this.trough = null;
+    this.maxContracts = 0;
+    this.bar = 0;
+  }
+
+  configure(cfg) {
+    this.declared = { ...DEFAULTS };
+    for (const [k, v] of Object.entries(cfg)) {
+      if (v === undefined) continue;
+      this.declared[k] = v;
+      if (!(k in this.overrides)) this.cfg[k] = v;
+    }
+  }
+
+  // ---------------------------------------------------------------- state
+  get positionSize() {
+    return this.open.reduce((s, t) => s + t.dir * t.qty, 0);
+  }
+  get positionAvgPrice() {
+    const q = this.open.reduce((s, t) => s + t.qty, 0);
+    if (!q) return NaN;
+    return this.open.reduce((s, t) => s + t.qty * t.entryPrice, 0) / q;
+  }
+  openProfit(price) {
+    return this.open.reduce((s, t) => s + t.dir * (price - t.entryPrice) * t.qty, 0);
+  }
+  equityAt(price) {
+    return this.cfg.initial_capital + this.realized + this.openProfit(price);
+  }
+
+  // --------------------------------------------------------- script calls
+  calcQty(qty, price) {
+    if (qty !== undefined && qty !== null && !Number.isNaN(qty)) return +qty;
+    const v = this.cfg.default_qty_value;
+    switch (this.cfg.default_qty_type) {
+      case 'cash': return v / price;
+      case 'percent_of_equity': return (this.equityAt(price) * v) / 100 / price;
+      default: return v;
+    }
+  }
+
+  placeOrder(kind, o) {
+    const bar = this.bar;
+    const price = this.data.close[bar];
+    const order = {
+      kind, // 'entry' | 'order'
+      id: String(o.id),
+      dir: o.dir,
+      qty: this.calcQty(o.qty, price),
+      limit: valid(o.limit) ? o.limit : null,
+      stop: valid(o.stop) ? o.stop : null,
+      comment: o.comment,
+      createdBar: bar,
+      seq: this.seq++,
+      ocaName: o.ocaName,
+      ocaType: o.ocaType,
+    };
+    if (!(order.qty > 0)) return;
+    // same id replaces a pending order
+    this.orders = this.orders.filter((x) => !((x.kind === 'entry' || x.kind === 'order') && x.id === order.id));
+    this.orders.push(order);
+  }
+
+  entry(o) { this.placeOrder('entry', o); }
+  order(o) { this.placeOrder('order', o); }
+
+  close(o) {
+    const id = String(o.id);
+    if (!this.open.some((t) => t.entryId === id)) return;
+    this.orders = this.orders.filter((x) => !(x.kind === 'close' && x.id === id));
+    this.orders.push({
+      kind: 'close', id, qty: o.qty, qtyPercent: o.qtyPercent, comment: o.comment,
+      createdBar: this.bar, seq: this.seq++, immediately: !!o.immediately,
+    });
+  }
+
+  closeAll(o) {
+    if (!this.open.length) return;
+    this.orders = this.orders.filter((x) => x.kind !== 'closeAll');
+    this.orders.push({ kind: 'closeAll', id: 'Close all', comment: o.comment, createdBar: this.bar, seq: this.seq++, immediately: !!o.immediately });
+  }
+
+  exit(o) {
+    const fromEntry = o.fromEntry ? String(o.fromEntry) : '';
+    const key = `${o.id}|${fromEntry}`;
+    const rule = {
+      id: String(o.id), fromEntry, key,
+      qty: valid(o.qty) ? o.qty : null,
+      qtyPercent: valid(o.qtyPercent) ? o.qtyPercent : 100,
+      profit: valid(o.profit) ? o.profit : null,
+      limit: valid(o.limit) ? o.limit : null,
+      loss: valid(o.loss) ? o.loss : null,
+      stop: valid(o.stop) ? o.stop : null,
+      trailPrice: valid(o.trailPrice) ? o.trailPrice : null,
+      trailPoints: valid(o.trailPoints) ? o.trailPoints : null,
+      trailOffset: valid(o.trailOffset) ? o.trailOffset : null,
+      comment: o.comment, commentProfit: o.commentProfit, commentLoss: o.commentLoss, commentTrailing: o.commentTrailing,
+      createdBar: (this.exitRules.get(key) || {}).createdBar ?? this.bar,
+      updatedBar: this.bar,
+      seq: this.seq++,
+    };
+    const hasLevel = [rule.profit, rule.limit, rule.loss, rule.stop, rule.trailPrice, rule.trailPoints].some((v) => v !== null);
+    if (!hasLevel) return;
+    this.exitRules.set(key, rule);
+  }
+
+  cancel(id) {
+    id = String(id);
+    this.orders = this.orders.filter((x) => !((x.kind === 'entry' || x.kind === 'order') && x.id === id));
+    for (const [k, r] of this.exitRules) if (r.id === id) this.exitRules.delete(k);
+  }
+
+  cancelAll() {
+    this.orders = this.orders.filter((x) => x.kind === 'close' || x.kind === 'closeAll');
+    this.exitRules.clear();
+  }
+
+  // --------------------------------------------------------- accounting
+  commission(qty, price) {
+    const v = this.cfg.commission_value || 0;
+    switch (this.cfg.commission_type) {
+      case 'cash_per_contract': return qty * v;
+      case 'cash_per_order': return v;
+      default: return (qty * price * v) / 100;
+    }
+  }
+
+  slip(price, dir) {
+    return price + dir * (this.cfg.slippage || 0) * this.mintick;
+  }
+
+  openTrade(entryId, dir, qty, price, bar, comment) {
+    const comm = this.commission(qty, price);
+    this.commissionPaid += comm;
+    const t = {
+      uid: ++tradeSeq, entryId, dir, qty, origQty: qty, entryPrice: price, entryBar: bar,
+      entryTime: this.data.time[bar], entryComment: comment, entryCommission: comm,
+      maxFav: 0, maxAdv: 0, exitsDone: new Set(), trail: {},
+    };
+    this.open.push(t);
+    this.fills.push({ bar, price, dir, qty, id: entryId, comment, type: 'entry' });
+    const abs = Math.abs(this.positionSize);
+    if (abs > this.maxContracts) this.maxContracts = abs;
+    return t;
+  }
+
+  closeTrade(t, qty, price, bar, exitId, comment) {
+    qty = Math.min(qty, t.qty);
+    if (!(qty > 0)) return;
+    const exitComm = this.commission(qty, price);
+    this.commissionPaid += exitComm;
+    const share = qty / t.qty;
+    const entryComm = t.entryCommission * share;
+    const gross = t.dir * (price - t.entryPrice) * qty;
+    const profit = gross - entryComm - exitComm;
+    this.realized += gross - exitComm - entryComm;
+    this.closed.push({
+      num: this.closed.length + 1,
+      entryId: t.entryId, exitId, dir: t.dir, qty,
+      entryPrice: t.entryPrice, exitPrice: price,
+      entryBar: t.entryBar, exitBar: bar,
+      entryTime: t.entryTime, exitTime: this.data.time[bar],
+      entryComment: t.entryComment, exitComment: comment,
+      profit, profitPct: (profit / (t.entryPrice * qty)) * 100,
+      commission: entryComm + exitComm,
+      runup: t.maxFav * share, drawdown: t.maxAdv * share,
+      cumProfit: this.realized,
+    });
+    this.fills.push({ bar, price, dir: -t.dir, qty, id: exitId, comment, type: 'exit' });
+    t.entryCommission -= entryComm;
+    t.qty -= qty;
+    if (t.qty <= 1e-12) this.open = this.open.filter((x) => x !== t);
+  }
+
+  // Close matching trades FIFO for a total quantity.
+  closeQty(trades, qty, price, bar, exitId, comment) {
+    let left = qty;
+    for (const t of [...trades]) {
+      if (left <= 1e-12) break;
+      const q = Math.min(left, t.qty);
+      this.closeTrade(t, q, price, bar, exitId, comment);
+      left -= q;
+    }
+    return qty - left;
+  }
+
+  // ------------------------------------------------------------- filling
+  fillMarket(o, price, bar) {
+    const open = this.open;
+    if (o.kind === 'close') {
+      const trades = open.filter((t) => t.entryId === o.id);
+      if (!trades.length) return;
+      const total = trades.reduce((s, t) => s + t.qty, 0);
+      let q = total;
+      if (valid(o.qty)) q = Math.min(o.qty, total);
+      else if (valid(o.qtyPercent)) q = (total * o.qtyPercent) / 100;
+      const dir = -trades[0].dir;
+      this.closeQty(trades, q, this.slip(price, dir), bar, o.comment || `Close entry(s) order ${o.id}`, o.comment);
+      return;
+    }
+    if (o.kind === 'closeAll') {
+      if (!open.length) return;
+      const dir = -open[0].dir;
+      this.closeQty(open, Infinity, this.slip(price, dir), bar, o.comment || 'Close entry(s) order', o.comment);
+      return;
+    }
+    this.fillEntryOrder(o, this.slip(price, o.dir), bar);
+  }
+
+  fillEntryOrder(o, price, bar) {
+    const pos = this.positionSize;
+    if (o.kind === 'entry') {
+      if (pos !== 0 && Math.sign(pos) !== o.dir) {
+        this.closeQty(this.open, Infinity, price, bar, o.id, o.comment);
+      } else if (pos !== 0 && this.open.length >= Math.max(1, this.cfg.pyramiding)) {
+        return false; // pyramiding limit: order rejected
+      }
+      this.openTrade(o.id, o.dir, o.qty, price, bar, o.comment);
+      return true;
+    }
+    // strategy.order: net against an opposite position first
+    let qty = o.qty;
+    if (pos !== 0 && Math.sign(pos) !== o.dir) {
+      qty -= this.closeQty(this.open, qty, price, bar, o.id, o.comment);
+    }
+    if (qty > 1e-12) this.openTrade(o.id, o.dir, qty, price, bar, o.comment);
+    return true;
+  }
+
+  // Exit children for current open trades.
+  exitChildren() {
+    const out = [];
+    const rules = [...this.exitRules.values()].sort((a, b) => a.seq - b.seq);
+    for (const r of rules) {
+      for (const t of this.open) {
+        if (r.fromEntry && t.entryId !== r.fromEntry) continue;
+        if (t.exitsDone.has(r.key)) continue;
+        const e = t.entryPrice, d = t.dir, tick = this.mintick;
+        const limit = r.limit ?? (r.profit !== null ? e + d * r.profit * tick : null);
+        const stop = r.stop ?? (r.loss !== null ? e - d * r.loss * tick : null);
+        let trailStop = null;
+        const act = r.trailPrice ?? (r.trailPoints !== null ? e + d * r.trailPoints * tick : null);
+        if (act !== null && r.trailOffset !== null) {
+          const tr = t.trail[r.key] || (t.trail[r.key] = { active: false, extreme: null, act });
+          tr.act = act;
+          if (tr.active) trailStop = tr.extreme - d * r.trailOffset * tick;
+        }
+        out.push({ rule: r, trade: t, limit, stop, trailStop });
+      }
+    }
+    return out;
+  }
+
+  // distance from cur along segment cur->end to trigger, or null
+  static trigger(kind, side, level, cur, end) {
+    // side: +1 buy, -1 sell. kind: 'limit' | 'stop'
+    const buy = side > 0;
+    if (kind === 'limit') {
+      if (buy ? cur <= level : cur >= level) return { dist: 0, price: cur };
+      if (buy ? end <= level : end >= level) return { dist: Math.abs(cur - level), price: level };
+    } else {
+      if (buy ? cur >= level : cur <= level) return { dist: 0, price: cur };
+      if (buy ? end >= level : end <= level) return { dist: Math.abs(cur - level), price: level };
+    }
+    return null;
+  }
+
+  candidates(cur, end) {
+    const list = [];
+    for (const o of this.orders) {
+      if ((o.kind !== 'entry' && o.kind !== 'order') || o.createdBar >= this.bar) continue;
+      if (o.limit === null && o.stop === null) continue;
+      if (o.stop !== null && !o.stopHit) {
+        const tg = Broker.trigger('stop', o.dir, o.stop, cur, end);
+        if (tg) list.push({ ...tg, seq: o.seq, run: () => this.triggerStop(o, tg.price) });
+      } else {
+        const tg = Broker.trigger('limit', o.dir, o.limit, cur, end);
+        if (tg) list.push({ ...tg, seq: o.seq, run: () => this.fillPending(o, tg.price, 'limit') });
+      }
+    }
+    for (const c of this.exitChildren()) {
+      const side = -c.trade.dir;
+      const levels = [];
+      if (c.limit !== null) levels.push(['limit', c.limit, c.rule.commentProfit]);
+      if (c.stop !== null) levels.push(['stop', c.stop, c.rule.commentLoss]);
+      if (c.trailStop !== null) levels.push(['stop', c.trailStop, c.rule.commentTrailing]);
+      for (const [kind, level, cmt] of levels) {
+        const tg = Broker.trigger(kind, side, level, cur, end);
+        if (tg) {
+          const px = kind === 'stop' ? this.slip(tg.price, side) : tg.price;
+          list.push({ ...tg, seq: c.rule.seq, run: () => this.fillExit(c, px, cmt) });
+        }
+      }
+    }
+    list.sort((a, b) => a.dist - b.dist || a.seq - b.seq);
+    return list;
+  }
+
+  triggerStop(o, price) {
+    if (o.limit === null) return this.fillPending(o, price, 'stop');
+    o.stopHit = true; // stop-limit: now behaves as a limit order
+    return true;
+  }
+
+  fillPending(o, price, how) {
+    this.orders = this.orders.filter((x) => x !== o);
+    const px = how === 'stop' ? this.slip(price, o.dir) : price;
+    this.fillEntryOrder(o, px, this.bar);
+    if (o.ocaName && o.ocaType === 'cancel') {
+      this.orders = this.orders.filter((x) => x.ocaName !== o.ocaName);
+    }
+    return true;
+  }
+
+  fillExit(c, price, specificComment) {
+    const { rule: r, trade: t } = c;
+    if (!this.open.includes(t)) return false;
+    const q = r.qty !== null ? Math.min(r.qty, t.qty) : Math.min(t.qty, (t.origQty * r.qtyPercent) / 100);
+    t.exitsDone.add(r.key);
+    const cmt = specificComment || r.comment;
+    this.closeTrade(t, q, price, this.bar, cmt || r.id, cmt);
+    return true;
+  }
+
+  pathFor(bar) {
+    const d = this.data;
+    const o = d.open[bar], h = d.high[bar], l = d.low[bar], c = d.close[bar];
+    return Math.abs(h - o) <= Math.abs(o - l) ? [o, h, l, c] : [o, l, h, c];
+  }
+
+  updateTrails(price) {
+    for (const t of this.open) {
+      for (const [key, tr] of Object.entries(t.trail)) {
+        const r = this.exitRules.get(key);
+        if (!r) continue;
+        const better = t.dir > 0 ? price >= tr.act : price <= tr.act;
+        if (!tr.active && better) { tr.active = true; tr.extreme = price; }
+        else if (tr.active) tr.extreme = t.dir > 0 ? Math.max(tr.extreme, price) : Math.min(tr.extreme, price);
+      }
+    }
+  }
+
+  // Called before the script runs on `bar`.
+  processBar(bar) {
+    this.bar = bar;
+    const path = this.pathFor(bar);
+    // 1) market orders at the open
+    const market = this.orders
+      .filter((o) => o.createdBar < bar && (o.kind === 'close' || o.kind === 'closeAll' || (o.limit === null && o.stop === null)))
+      .sort((a, b) => a.seq - b.seq);
+    this.orders = this.orders.filter((o) => !market.includes(o));
+    for (const o of market) this.fillMarket(o, path[0], bar);
+    // ensure trail state objects exist for trades so activation is tracked
+    this.exitChildren();
+    // 2) walk the intrabar path
+    let cur = path[0];
+    for (let s = 1; s < path.length; s++) {
+      const end = path[s];
+      for (let guard = 0; guard < 1000; guard++) {
+        const cands = this.candidates(cur, end);
+        if (!cands.length) break;
+        const c = cands[0];
+        c.run();
+        cur = c.price;
+        this.exitChildren();
+      }
+      cur = end;
+      this.updateTrails(end);
+    }
+    this.trackExcursions(bar);
+    this.cleanupRules(bar);
+  }
+
+  // Called after the script ran on `bar`.
+  processOnClose(bar) {
+    const price = this.data.close[bar];
+    const market = this.orders
+      .filter((o) => o.createdBar === bar && (this.cfg.process_orders_on_close || o.immediately) &&
+        (o.kind === 'close' || o.kind === 'closeAll' || (o.limit === null && o.stop === null)))
+      .sort((a, b) => a.seq - b.seq);
+    this.orders = this.orders.filter((o) => !market.includes(o));
+    for (const o of market) this.fillMarket(o, price, bar);
+  }
+
+  trackExcursions(bar) {
+    const h = this.data.high[bar], l = this.data.low[bar];
+    for (const t of this.open) {
+      const fav = t.dir > 0 ? (h - t.entryPrice) * t.qty : (t.entryPrice - l) * t.qty;
+      const adv = t.dir > 0 ? (t.entryPrice - l) * t.qty : (h - t.entryPrice) * t.qty;
+      if (fav > t.maxFav) t.maxFav = fav;
+      if (adv > t.maxAdv) t.maxAdv = adv;
+    }
+  }
+
+  cleanupRules(bar) {
+    for (const [k, r] of this.exitRules) {
+      if (r.createdBar >= bar) continue;
+      const hasTrade = this.open.some((t) => (!r.fromEntry || t.entryId === r.fromEntry) && !t.exitsDone.has(k));
+      const hasPending = this.orders.some((o) => o.kind === 'entry' && (!r.fromEntry || o.id === r.fromEntry));
+      if (!hasTrade && !hasPending) this.exitRules.delete(k);
+    }
+  }
+
+  // Equity bookkeeping at the end of the bar.
+  endBar(bar) {
+    this.trackExcursions(bar);
+    const path = this.pathFor(bar);
+    for (const p of path.slice(1)) {
+      const eq = this.equityAt(p);
+      if (this.peak === null || eq > this.peak) this.peak = eq;
+      if (this.trough === null || eq < this.trough) this.trough = eq;
+      this.maxDD = Math.max(this.maxDD, this.peak - eq);
+      if (this.peak > 0) this.maxDDPct = Math.max(this.maxDDPct, ((this.peak - eq) / this.peak) * 100);
+      this.maxRunup = Math.max(this.maxRunup, eq - this.trough);
+    }
+    this.equity[bar] = this.equityAt(this.data.close[bar]);
+  }
+}
+
+function valid(v) {
+  return v !== undefined && v !== null && !(typeof v === 'number' && Number.isNaN(v));
+}
+
+return { Broker };
+})();
+
+const __m_metrics = (() => {
+// Strategy Tester performance summary, split into All / Long / Short like
+// TradingView's "Performance Summary" tab.
+
+function group(trades) {
+  const wins = trades.filter((t) => t.profit > 0);
+  const losses = trades.filter((t) => t.profit <= 0);
+  const sum = (a, f) => a.reduce((s, t) => s + f(t), 0);
+  const grossProfit = sum(wins, (t) => t.profit);
+  const grossLoss = -sum(losses, (t) => t.profit) + 0; // + 0 turns -0 into 0
+  const bars = (a) => (a.length ? sum(a, (t) => t.exitBar - t.entryBar) / a.length : NaN);
+  const avgWin = wins.length ? grossProfit / wins.length : NaN;
+  const avgLoss = losses.length ? grossLoss / losses.length : NaN;
+  return {
+    netProfit: grossProfit - grossLoss,
+    grossProfit,
+    grossLoss,
+    profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : NaN,
+    commission: sum(trades, (t) => t.commission),
+    totalTrades: trades.length,
+    winningTrades: wins.length,
+    losingTrades: losses.length,
+    percentProfitable: trades.length ? (wins.length / trades.length) * 100 : NaN,
+    avgTrade: trades.length ? sum(trades, (t) => t.profit) / trades.length : NaN,
+    avgTradePct: trades.length ? sum(trades, (t) => t.profitPct) / trades.length : NaN,
+    avgWin,
+    avgWinPct: wins.length ? sum(wins, (t) => t.profitPct) / wins.length : NaN,
+    avgLoss,
+    avgLossPct: losses.length ? sum(losses, (t) => -t.profitPct) / losses.length : NaN,
+    ratioAvgWinLoss: avgLoss > 0 ? avgWin / avgLoss : NaN,
+    largestWin: wins.length ? Math.max(...wins.map((t) => t.profit)) : NaN,
+    largestWinPct: wins.length ? Math.max(...wins.map((t) => t.profitPct)) : NaN,
+    largestLoss: losses.length ? -Math.min(...losses.map((t) => t.profit)) : NaN,
+    largestLossPct: losses.length ? -Math.min(...losses.map((t) => t.profitPct)) : NaN,
+    avgBars: bars(trades),
+    avgBarsWin: bars(wins),
+    avgBarsLoss: bars(losses),
+  };
+}
+
+// Sharpe / Sortino the way TradingView describes them: monthly returns of the
+// strategy's equity, 2% annual risk-free rate.
+function ratios(equity, time, initial) {
+  const months = [];
+  let lastKey = null;
+  let start = initial;
+  for (let i = 0; i < equity.length; i++) {
+    if (equity[i] === undefined) continue;
+    const d = new Date(time[i]);
+    const key = d.getUTCFullYear() * 12 + d.getUTCMonth();
+    if (lastKey !== null && key !== lastKey) {
+      months.push((equity[i - 1] - start) / start);
+      start = equity[i - 1];
+    }
+    lastKey = key;
+  }
+  if (equity.length) months.push((equity[equity.length - 1] - start) / start);
+  if (months.length < 2) return { sharpe: NaN, sortino: NaN };
+  const rf = 0.02 / 12;
+  const mean = months.reduce((a, b) => a + b, 0) / months.length;
+  const sd = Math.sqrt(months.reduce((a, b) => a + (b - mean) ** 2, 0) / months.length);
+  const downside = Math.sqrt(months.reduce((a, b) => a + Math.min(0, b - rf) ** 2, 0) / months.length);
+  return {
+    sharpe: sd > 0 ? (mean - rf) / sd : NaN,
+    sortino: downside > 0 ? (mean - rf) / downside : NaN,
+  };
+}
+
+function computeMetrics(broker, data) {
+  const trades = broker.closed;
+  const initial = broker.cfg.initial_capital;
+  const n = data.close.length;
+  const lastClose = data.close[n - 1];
+  const all = group(trades);
+  const long = group(trades.filter((t) => t.dir > 0));
+  const short = group(trades.filter((t) => t.dir < 0));
+  const openPL = broker.openProfit(lastClose);
+  const { sharpe, sortino } = ratios(broker.equity, data.time, initial);
+  const firstPrice = data.open[0];
+  return {
+    initialCapital: initial,
+    all, long, short,
+    netProfitPct: (all.netProfit / initial) * 100,
+    openPL,
+    maxDrawdown: broker.maxDD,
+    maxDrawdownPct: broker.maxDDPct,
+    maxRunup: broker.maxRunup,
+    maxRunupPct: (broker.maxRunup / initial) * 100,
+    buyHoldReturn: ((lastClose - firstPrice) / firstPrice) * initial,
+    buyHoldReturnPct: ((lastClose - firstPrice) / firstPrice) * 100,
+    sharpe, sortino,
+    maxContracts: broker.maxContracts,
+    commissionPaid: broker.commissionPaid,
+    openTrades: broker.open.length,
+    finalEquity: broker.equity[n - 1],
+  };
+}
+
+return { computeMetrics };
+})();
+
+const __m_runtime = (() => {
+// Pine Script interpreter: runs the script once per bar, bar by bar, the way
+// TradingView's runtime does, and drives the broker emulator.
+const { parse } = __m_parser;
+const { TA, isNa, fixnan, rollingSum, trueRange } = __m_ta;
+const { Broker } = __m_broker;
+const { computeMetrics } = __m_metrics;
+class PineRuntimeError extends Error {
+  constructor(message, line) {
+    super(line ? `line ${line}: ${message}` : message);
+    this.name = 'PineRuntimeError';
+    this.line = line;
+  }
+}
+
+class BreakSignal {}
+class ContinueSignal {}
+const BREAK = new BreakSignal();
+const CONTINUE = new ContinueSignal();
+
+class Scope {
+  constructor(parent) { this.parent = parent; this.vars = new Map(); }
+  lookup(name) {
+    for (let s = this; s; s = s.parent) {
+      const v = s.vars.get(name);
+      if (v) return v;
+    }
+    return null;
+  }
+  set(name, slot) { this.vars.set(name, slot); }
+}
+
+// ---------------------------------------------------------------- colors
+const NAMED_COLORS = {
+  aqua: '#00BCD4', black: '#363A45', blue: '#2196F3', fuchsia: '#E040FB', gray: '#787B86',
+  green: '#4CAF50', lime: '#00E676', maroon: '#880E4F', navy: '#311B92', olive: '#808000',
+  orange: '#FF9800', purple: '#9C27B0', red: '#FF5252', silver: '#B2B5BE', teal: '#00897B',
+  white: '#FFFFFF', yellow: '#FFEB3B',
+};
+function parseColor(c) {
+  if (typeof c !== 'string') return null;
+  const m = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(c);
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, a: m[2] ? parseInt(m[2], 16) : 255 };
+}
+const hex2 = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+function makeColor(r, g, b, transp = 0) {
+  return `#${hex2(r)}${hex2(g)}${hex2(b)}${hex2(255 * (1 - (isNa(transp) ? 0 : transp) / 100))}`.toUpperCase();
+}
+
+// ------------------------------------------------------------- time utils
+const fmtCache = new Map();
+function timeParts(ms, tz) {
+  if (!tz || tz === 'UTC' || tz === 'Etc/UTC' || tz === 'GMT') return utcParts(ms);
+  const off = /^(?:GMT|UTC)\s*([+-])(\d{1,2})(?::?(\d{2}))?$/.exec(tz);
+  if (off) {
+    const mins = (off[1] === '-' ? -1 : 1) * (+off[2] * 60 + +(off[3] || 0));
+    return utcParts(ms + mins * 60000);
+  }
+  let f = fmtCache.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric', second: 'numeric', weekday: 'short',
+    });
+    fmtCache.set(tz, f);
+  }
+  const p = {};
+  for (const x of f.formatToParts(new Date(ms))) p[x.type] = x.value;
+  const wd = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday) + 1;
+  return { y: +p.year, mo: +p.month, d: +p.day, h: +p.hour % 24, mi: +p.minute, s: +p.second, wd };
+}
+function utcParts(ms) {
+  const d = new Date(ms);
+  return {
+    y: d.getUTCFullYear(), mo: d.getUTCMonth() + 1, d: d.getUTCDate(), h: d.getUTCHours(),
+    mi: d.getUTCMinutes(), s: d.getUTCSeconds(), wd: d.getUTCDay() + 1,
+  };
+}
+function zonedToUtc(y, mo, d, h, mi, s, tz) {
+  const guess = Date.UTC(y, mo - 1, d, h, mi, s);
+  const p = timeParts(guess, tz);
+  const asUtc = Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi, p.s);
+  return guess - (asUtc - guess);
+}
+function weekOfYear(ms) {
+  const d = new Date(ms);
+  const t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const day = (new Date(t).getUTCDay() + 6) % 7;
+  const thursday = t - day * 86400000 + 3 * 86400000;
+  const firstThursday = Date.UTC(new Date(thursday).getUTCFullYear(), 0, 4);
+  return 1 + Math.round((thursday - firstThursday) / 604800000 - ((new Date(firstThursday).getUTCDay() + 6) % 7 - 3) / 7);
+}
+
+// ------------------------------------------------------------- constants
+const CONSTANTS = {
+  na: NaN,
+  'strategy.long': 'long', 'strategy.short': 'short',
+  'strategy.fixed': 'fixed', 'strategy.cash': 'cash', 'strategy.percent_of_equity': 'percent_of_equity',
+  'strategy.commission.percent': 'percent', 'strategy.commission.cash_per_contract': 'cash_per_contract',
+  'strategy.commission.cash_per_order': 'cash_per_order',
+  'strategy.direction.all': 'all', 'strategy.direction.long': 'long', 'strategy.direction.short': 'short',
+  'strategy.oca.none': 'none', 'strategy.oca.cancel': 'cancel', 'strategy.oca.reduce': 'reduce',
+  'math.pi': Math.PI, 'math.e': Math.E, 'math.phi': 1.618033988749895, 'math.rphi': 0.618033988749895,
+  'dayofweek.sunday': 1, 'dayofweek.monday': 2, 'dayofweek.tuesday': 3, 'dayofweek.wednesday': 4,
+  'dayofweek.thursday': 5, 'dayofweek.friday': 6, 'dayofweek.saturday': 7,
+  'barmerge.gaps_on': true, 'barmerge.gaps_off': false, 'barmerge.lookahead_on': true, 'barmerge.lookahead_off': false,
+  'order.ascending': 'asc', 'order.descending': 'desc',
+};
+for (const [k, v] of Object.entries(NAMED_COLORS)) CONSTANTS[`color.${k}`] = v;
+for (const s of ['line', 'linebr', 'stepline', 'stepline_diamond', 'histogram', 'columns', 'circles', 'cross', 'area', 'areabr', 'steplinebr'])
+  CONSTANTS[`plot.style_${s}`] = s;
+for (const s of ['triangleup', 'triangledown', 'arrowup', 'arrowdown', 'labelup', 'labeldown', 'circle', 'cross', 'xcross', 'diamond', 'square', 'flag'])
+  CONSTANTS[`shape.${s}`] = s;
+for (const s of ['abovebar', 'belowbar', 'top', 'bottom', 'absolute']) CONSTANTS[`location.${s}`] = s;
+for (const s of ['auto', 'tiny', 'small', 'normal', 'large', 'huge']) CONSTANTS[`size.${s}`] = s;
+const PREFIX_CONSTANTS = ['display.', 'line.style_', 'hline.style_', 'extend.', 'xloc.', 'yloc.', 'label.style_', 'text.align_',
+  'text.wrap_', 'position.', 'format.', 'scale.', 'alert.freq_', 'font.family_', 'currency.', 'session.', 'adjustment.',
+  'plot.linestyle_', 'splits.', 'dividends.', 'earnings.', 'shape.', 'location.', 'size.'];
+
+// Names of the built-in price series, for input.source.
+const SOURCES = ['open', 'high', 'low', 'close', 'volume', 'hl2', 'hlc3', 'ohlc4', 'hlcc4'];
+
+function inferMintick(data) {
+  let dec = 0;
+  const n = Math.min(data.close.length, 500);
+  for (let i = 0; i < n; i++) {
+    for (const v of [data.open[i], data.high[i], data.low[i], data.close[i]]) {
+      const s = String(v);
+      if (s.includes('e')) continue;
+      const p = s.indexOf('.');
+      if (p >= 0) dec = Math.max(dec, s.length - p - 1);
+    }
+  }
+  return Math.pow(10, -Math.min(dec, 8));
+}
+
+function inferTimeframe(time) {
+  const diffs = [];
+  for (let i = 1; i < Math.min(time.length, 200); i++) diffs.push(time[i] - time[i - 1]);
+  diffs.sort((a, b) => a - b);
+  const sec = (diffs[Math.floor(diffs.length / 2)] || 86400000) / 1000;
+  if (sec >= 28 * 86400) return { period: 'M', seconds: 2628003, mult: 1, unit: 'M' };
+  if (sec >= 7 * 86400) return { period: 'W', seconds: 604800, mult: 1, unit: 'W' };
+  if (sec >= 86400) return { period: 'D', seconds: 86400, mult: 1, unit: 'D' };
+  if (sec >= 60) { const m = Math.round(sec / 60); return { period: String(m), seconds: m * 60, mult: m, unit: '' }; }
+  return { period: `${Math.round(sec)}S`, seconds: Math.round(sec), mult: Math.round(sec), unit: 'S' };
+}
+
+function fmtNumber(v, fmt, mintick) {
+  if (isNa(v)) return 'NaN';
+  if (typeof v !== 'number') return String(v);
+  if (fmt === 'mintick') return v.toFixed(Math.max(0, Math.round(-Math.log10(mintick))));
+  if (fmt === 'percent') return `${v.toFixed(2)}%`;
+  if (fmt === 'volume') return Math.abs(v) >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : Math.abs(v) >= 1e3 ? `${(v / 1e3).toFixed(2)}K` : v.toFixed(2);
+  if (typeof fmt === 'string' && /^[#0,]*\.?[#0]*$/.test(fmt) && fmt.length) {
+    const dec = fmt.includes('.') ? fmt.split('.')[1].length : 0;
+    const req = fmt.includes('.') ? (fmt.split('.')[1].match(/0/g) || []).length : 0;
+    let s = v.toFixed(dec);
+    if (dec > req && s.includes('.')) s = s.replace(new RegExp(`0{0,${dec - req}}$`), '').replace(/\.$/, '');
+    return s;
+  }
+  if (Number.isInteger(v)) return String(v);
+  return String(+v.toFixed(8));
+}
+
+// ------------------------------------------------------------------ runtime
+class Runtime {
+  constructor(source, data, options = {}) {
+    this.ast = typeof source === 'string' ? parse(source) : source;
+    this.data = data;
+    this.n = data.close.length;
+    this.opts = options;
+    this.inputOverrides = options.inputs || {};
+    this.tz = options.timezone || 'UTC';
+    this.mintick = options.mintick || inferMintick(data);
+    this.tf = options.timeframe ? { ...inferTimeframe(data.time), period: options.timeframe } : inferTimeframe(data.time);
+    this.symbol = options.symbol || 'SYMBOL';
+    this.slots = new Map();
+    this.varSlots = [];
+    this.exprHist = new Map();
+    this.taState = new Map();
+    this.functions = new Map();
+    this.inputs = new Map();
+    this.plots = new Map();
+    this.shapes = new Map();
+    this.hlines = new Map();
+    this.bgcolors = null;
+    this.barcolors = null;
+    this.broker = null;
+    this.declaration = null;
+    this.stratHist = {};
+    this.logs = [];
+    this.depth = 0;
+    this.bar = 0;
+    for (const s of this.ast.body) if (s.type === 'FuncDef') this.functions.set(s.name, s);
+    this.builtins = buildBuiltins(this);
+  }
+
+  // -------------------------------------------------------------- run loop
+  run() {
+    const t0 = Date.now();
+    for (let b = 0; b < this.n; b++) {
+      this.bar = b;
+      if (this.broker && b > 0) this.broker.processBar(b);
+      this.globalScope = new Scope(null);
+      const ctx = { path: '', scope: this.globalScope };
+      for (const stmt of this.ast.body) {
+        if (stmt.type === 'FuncDef') continue;
+        this.exec(stmt, ctx);
+      }
+      for (const s of this.varSlots) s.hist[b] = s.value;
+      if (this.broker) {
+        this.snapshotStrategy(b);
+        this.broker.processOnClose(b);
+        this.broker.endBar(b);
+      }
+    }
+    return this.results(Date.now() - t0);
+  }
+
+  results(ms) {
+    const decl = this.declaration || { kind: 'indicator', title: 'Script', overlay: false };
+    const out = {
+      kind: decl.kind,
+      title: decl.title,
+      overlay: decl.overlay,
+      mintick: this.mintick,
+      timeframe: this.tf.period,
+      inputs: [...this.inputs.values()],
+      plots: [...this.plots.values()],
+      shapes: [...this.shapes.values()],
+      hlines: [...this.hlines.values()],
+      bgcolors: this.bgcolors,
+      barcolors: this.barcolors,
+      logs: this.logs,
+      elapsedMs: ms,
+      strategy: null,
+    };
+    if (this.broker) {
+      const br = this.broker;
+      const last = this.data.close[this.n - 1];
+      out.strategy = {
+        config: br.cfg,
+        declared: br.declared || br.cfg,
+        trades: br.closed,
+        openTrades: br.open.map((t) => ({
+          entryId: t.entryId, dir: t.dir, qty: t.qty, entryPrice: t.entryPrice, entryBar: t.entryBar,
+          entryTime: t.entryTime, entryComment: t.entryComment,
+          profit: t.dir * (last - t.entryPrice) * t.qty - t.entryCommission,
+        })),
+        fills: br.fills,
+        equity: br.equity,
+        metrics: computeMetrics(br, this.data),
+      };
+    }
+    return out;
+  }
+
+  snapshotStrategy(b) {
+    const br = this.broker;
+    const vals = {
+      'strategy.position_size': br.positionSize,
+      'strategy.position_avg_price': br.positionAvgPrice,
+      'strategy.equity': br.equityAt(this.data.close[b]),
+      'strategy.netprofit': br.realized,
+      'strategy.openprofit': br.openProfit(this.data.close[b]),
+      'strategy.opentrades': br.open.length,
+      'strategy.closedtrades': br.closed.length,
+    };
+    for (const [k, v] of Object.entries(vals)) (this.stratHist[k] || (this.stratHist[k] = []))[b] = v;
+  }
+
+  // ------------------------------------------------------------ variables
+  builtinVar(name, bar) {
+    const d = this.data;
+    if (bar < 0) return undefined;
+    switch (name) {
+      case 'open': return d.open[bar];
+      case 'high': return d.high[bar];
+      case 'low': return d.low[bar];
+      case 'close': return d.close[bar];
+      case 'volume': return d.volume[bar];
+      case 'time': return d.time[bar];
+      case 'time_close': return d.time[bar] + this.tf.seconds * 1000;
+      case 'time_tradingday': return d.time[bar];
+      case 'timenow': return Date.now();
+      case 'bar_index': return bar;
+      case 'last_bar_index': return this.n - 1;
+      case 'last_bar_time': return d.time[this.n - 1];
+      case 'hl2': return (d.high[bar] + d.low[bar]) / 2;
+      case 'hlc3': return (d.high[bar] + d.low[bar] + d.close[bar]) / 3;
+      case 'ohlc4': return (d.open[bar] + d.high[bar] + d.low[bar] + d.close[bar]) / 4;
+      case 'hlcc4': return (d.high[bar] + d.low[bar] + 2 * d.close[bar]) / 4;
+      case 'year': return timeParts(d.time[bar], this.tz).y;
+      case 'month': return timeParts(d.time[bar], this.tz).mo;
+      case 'dayofmonth': return timeParts(d.time[bar], this.tz).d;
+      case 'dayofweek': return timeParts(d.time[bar], this.tz).wd;
+      case 'hour': return timeParts(d.time[bar], this.tz).h;
+      case 'minute': return timeParts(d.time[bar], this.tz).mi;
+      case 'second': return timeParts(d.time[bar], this.tz).s;
+      case 'weekofyear': return weekOfYear(d.time[bar]);
+      case 'barstate.isfirst': return bar === 0;
+      case 'barstate.islast': return bar === this.n - 1;
+      case 'barstate.islastconfirmedhistory': return bar === this.n - 1;
+      case 'barstate.isconfirmed': case 'barstate.ishistory': case 'barstate.isnew': return true;
+      case 'barstate.isrealtime': return false;
+      case 'syminfo.ticker': case 'syminfo.tickerid': case 'syminfo.description': return this.symbol;
+      case 'syminfo.prefix': return '';
+      case 'syminfo.mintick': return this.mintick;
+      case 'syminfo.pointvalue': return 1;
+      case 'syminfo.currency': return this.opts.currency || 'USD';
+      case 'syminfo.basecurrency': return '';
+      case 'syminfo.timezone': return this.tz;
+      case 'syminfo.type': return 'crypto';
+      case 'syminfo.session': return 'regular';
+      case 'timeframe.period': return this.tf.period;
+      case 'timeframe.multiplier': return this.tf.mult;
+      case 'timeframe.isintraday': return this.tf.seconds < 86400;
+      case 'timeframe.isdaily': return this.tf.period === 'D';
+      case 'timeframe.isweekly': return this.tf.period === 'W';
+      case 'timeframe.ismonthly': return this.tf.period === 'M';
+      case 'timeframe.isdwm': return this.tf.seconds >= 86400;
+      case 'timeframe.isminutes': return this.tf.unit === '';
+      case 'timeframe.isseconds': return this.tf.unit === 'S';
+      case 'timeframe.isticks': return false;
+      // computed built-ins: only the current bar is available here; history
+      // references to them go through the generic per-expression history.
+      case 'ta.tr': return bar === this.bar ? trueRange(this, false) : NaN;
+      case 'ta.vwap': return bar === this.bar ? TA.vwap[1](this, '__vwap', undefined) : NaN;
+      case 'ta.obv': return bar === this.bar ? this.obv() : NaN;
+      case 'strategy.initial_capital': return this.broker ? this.broker.cfg.initial_capital : NaN;
+      case 'strategy.grossprofit': return this.broker ? this.broker.closed.filter((t) => t.profit > 0).reduce((s, t) => s + t.profit, 0) : NaN;
+      case 'strategy.grossloss': return this.broker ? -this.broker.closed.filter((t) => t.profit <= 0).reduce((s, t) => s + t.profit, 0) : NaN;
+      case 'strategy.wintrades': return this.broker ? this.broker.closed.filter((t) => t.profit > 0).length : NaN;
+      case 'strategy.losstrades': return this.broker ? this.broker.closed.filter((t) => t.profit < 0).length : NaN;
+      case 'strategy.eventrades': return this.broker ? this.broker.closed.filter((t) => t.profit === 0).length : NaN;
+      case 'strategy.max_drawdown': return this.broker ? this.broker.maxDD : NaN;
+      case 'strategy.max_runup': return this.broker ? this.broker.maxRunup : NaN;
+      case 'strategy.position_entry_name': return this.broker && this.broker.open.length ? this.broker.open[0].entryId : '';
+      case 'strategy.account_currency': return this.opts.currency || 'USD';
+      default: break;
+    }
+    if (name.startsWith('strategy.') && this.broker) {
+      if (bar === this.bar) {
+        const br = this.broker;
+        switch (name) {
+          case 'strategy.position_size': return br.positionSize;
+          case 'strategy.position_avg_price': return br.positionAvgPrice;
+          case 'strategy.equity': return br.equityAt(this.data.close[bar]);
+          case 'strategy.netprofit': return br.realized;
+          case 'strategy.openprofit': return br.openProfit(this.data.close[bar]);
+          case 'strategy.opentrades': return br.open.length;
+          case 'strategy.closedtrades': return br.closed.length;
+          default: break;
+        }
+      } else if (this.stratHist[name]) {
+        const v = this.stratHist[name][bar];
+        return v === undefined ? NaN : v;
+      }
+    }
+    if (name.startsWith('strategy.') && !this.broker &&
+      ['strategy.position_size', 'strategy.opentrades', 'strategy.closedtrades', 'strategy.netprofit', 'strategy.equity'].includes(name)) return 0;
+    return undefined;
+  }
+
+  obv() {
+    const s = this.taState.get('__obv') || { out: [] };
+    this.taState.set('__obv', s);
+    const b = this.bar, d = this.data;
+    const prev = b > 0 && s.out[b - 1] !== undefined ? s.out[b - 1] : 0;
+    const ch = b > 0 ? Math.sign(d.close[b] - d.close[b - 1]) : 0;
+    s.out[b] = prev + ch * d.volume[b];
+    return s.out[b];
+  }
+
+  slotAt(slot, off) {
+    if (off === 0) return slot.value;
+    const idx = this.bar - off;
+    if (idx < 0) return NaN;
+    let v = slot.hist[idx];
+    if (v === undefined) {
+      for (let j = idx - 1; j >= 0 && j >= idx - 5000; j--) {
+        if (slot.hist[j] !== undefined) { v = slot.hist[j]; break; }
+      }
+    }
+    return v === undefined ? NaN : v;
+  }
+
+  getSlot(key, isVar) {
+    let slot = this.slots.get(key);
+    if (!slot) {
+      slot = { value: NaN, hist: [], isVar, init: false };
+      this.slots.set(key, slot);
+      if (isVar) this.varSlots.push(slot);
+    }
+    return slot;
+  }
+
+  lookupIdent(n, ctx) {
+    const slot = ctx.scope.lookup(n.name);
+    if (slot) return slot.value;
+    const v = this.builtinVar(n.name, this.bar);
+    if (v !== undefined) return v;
+    if (n.name in CONSTANTS) return CONSTANTS[n.name];
+    if (PREFIX_CONSTANTS.some((p) => n.name.startsWith(p))) {
+      if (n.name === 'format.mintick') return 'mintick';
+      if (n.name.startsWith('format.')) return n.name.slice(7);
+      return n.name;
+    }
+    if (this.functions.has(n.name) || this.builtins[n.name]) return n.name; // function reference
+    throw new PineRuntimeError(`Undeclared identifier '${n.name}'`, n.line);
+  }
+
+  // ----------------------------------------------------------- statements
+  exec(s, ctx) {
+    try {
+      return this.execInner(s, ctx);
+    } catch (e) {
+      if (e === BREAK || e === CONTINUE) throw e;
+      if (!e.line && (e instanceof Error)) {
+        const err = new PineRuntimeError(e.message, s.line);
+        throw err;
+      }
+      throw e;
+    }
+  }
+
+  execInner(s, ctx) {
+    switch (s.type) {
+      case 'VarDecl': {
+        const key = ctx.path ? `${ctx.path}#${s.id}` : s.id;
+        const isVar = !!s.mode;
+        const slot = this.getSlot(key, isVar);
+        if (!isVar || !slot.init) {
+          slot.value = this.evalRhs(s.init, ctx);
+          slot.init = true;
+        }
+        slot.hist[this.bar] = slot.value;
+        ctx.scope.set(s.name, slot);
+        return slot.value;
+      }
+      case 'TupleDecl': {
+        const v = this.evalRhs(s.init, ctx);
+        if (!Array.isArray(v)) throw new PineRuntimeError('right side of tuple assignment must return a tuple', s.line);
+        s.names.forEach((name, i) => {
+          if (name === '_') return;
+          let slot;
+          if (s.reassign) {
+            slot = ctx.scope.lookup(name);
+            if (!slot) throw new PineRuntimeError(`Undeclared identifier '${name}'`, s.line);
+          } else {
+            slot = this.getSlot(`${ctx.path}#${s.id}:${i}`, false);
+            ctx.scope.set(name, slot);
+          }
+          slot.value = v[i];
+          slot.hist[this.bar] = v[i];
+        });
+        return v;
+      }
+      case 'Assign': {
+        const slot = ctx.scope.lookup(s.name);
+        if (!slot) throw new PineRuntimeError(`Undeclared identifier '${s.name}' (declare it with '=' before using ':=')`, s.line);
+        let v = this.evalRhs(s.value, ctx);
+        if (s.op !== ':=') v = this.binary(s.op[0], slot.value, v);
+        slot.value = v;
+        slot.hist[this.bar] = v;
+        return v;
+      }
+      case 'ExprStmt': return this.eval(s.expr, ctx);
+      case 'If': return this.evalIf(s, ctx);
+      case 'Switch': return this.evalSwitch(s, ctx);
+      case 'For': return this.execFor(s, ctx);
+      case 'ForIn': return this.execForIn(s, ctx);
+      case 'While': {
+        let v = NaN;
+        let guard = 0;
+        while (this.truthy(this.eval(s.test, ctx))) {
+          if (++guard > 500000) throw new PineRuntimeError('loop takes too long', s.line);
+          try { v = this.execBlock(s.body, ctx); } catch (e) {
+            if (e === BREAK) break;
+            if (e === CONTINUE) continue;
+            throw e;
+          }
+        }
+        return v;
+      }
+      case 'Break': throw BREAK;
+      case 'Continue': throw CONTINUE;
+      case 'FuncDef': this.functions.set(s.name, s); return NaN;
+      default: throw new PineRuntimeError(`cannot execute ${s.type}`, s.line);
+    }
+  }
+
+  evalRhs(n, ctx) {
+    if (n.type === 'If') return this.evalIf(n, ctx);
+    if (n.type === 'Switch') return this.evalSwitch(n, ctx);
+    return this.eval(n, ctx);
+  }
+
+  execBlock(block, ctx) {
+    const inner = { path: ctx.path, scope: new Scope(ctx.scope) };
+    let v = NaN;
+    for (const s of block.body) v = this.exec(s, inner);
+    return v;
+  }
+
+  evalIf(n, ctx) {
+    if (this.truthy(this.eval(n.test, ctx))) return this.execBlock(n.consequent, ctx);
+    if (n.alternate) {
+      if (n.alternate.type === 'If') return this.evalIf(n.alternate, ctx);
+      return this.execBlock(n.alternate, ctx);
+    }
+    return NaN;
+  }
+
+  evalSwitch(n, ctx) {
+    const disc = n.discriminant ? this.eval(n.discriminant, ctx) : undefined;
+    for (const c of n.cases) {
+      if (c.test === null) return this.execBlock(c.body, ctx);
+      const tv = this.eval(c.test, ctx);
+      const match = n.discriminant ? tv === disc : this.truthy(tv);
+      if (match) return this.execBlock(c.body, ctx);
+    }
+    return NaN;
+  }
+
+  execFor(s, ctx) {
+    const from = this.eval(s.from, ctx);
+    const to = this.eval(s.to, ctx);
+    if (isNa(from) || isNa(to)) return NaN;
+    let step = s.step ? Math.abs(this.eval(s.step, ctx)) : 1;
+    if (!(step > 0)) step = 1;
+    const dir = to >= from ? 1 : -1;
+    const loopScope = new Scope(ctx.scope);
+    const slot = this.getSlot(`${ctx.path}#for${s.id}`, false);
+    loopScope.set(s.var, slot);
+    const inner = { path: ctx.path, scope: loopScope };
+    let v = NaN;
+    let guard = 0;
+    for (let i = from; dir > 0 ? i <= to : i >= to; i += dir * step) {
+      if (++guard > 500000) throw new PineRuntimeError('loop takes too long', s.line);
+      slot.value = i;
+      try { v = this.execBlock(s.body, inner); } catch (e) {
+        if (e === BREAK) break;
+        if (e === CONTINUE) continue;
+        throw e;
+      }
+    }
+    return v;
+  }
+
+  execForIn(s, ctx) {
+    const arr = this.eval(s.iterable, ctx);
+    const items = arr && arr.__array ? [...arr.items] : Array.isArray(arr) ? arr : [];
+    const loopScope = new Scope(ctx.scope);
+    const itemSlot = this.getSlot(`${ctx.path}#forin${s.id}`, false);
+    const idxSlot = this.getSlot(`${ctx.path}#forinidx${s.id}`, false);
+    loopScope.set(s.item, itemSlot);
+    if (s.index) loopScope.set(s.index, idxSlot);
+    const inner = { path: ctx.path, scope: loopScope };
+    let v = NaN;
+    for (let i = 0; i < items.length; i++) {
+      itemSlot.value = items[i];
+      idxSlot.value = i;
+      try { v = this.execBlock(s.body, inner); } catch (e) {
+        if (e === BREAK) break;
+        if (e === CONTINUE) continue;
+        throw e;
+      }
+    }
+    return v;
+  }
+
+  // ---------------------------------------------------------- expressions
+  truthy(v) {
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number') return !Number.isNaN(v) && v !== 0;
+    return !isNa(v) && v !== '';
+  }
+
+  binary(op, a, b) {
+    switch (op) {
+      case '+':
+        if (typeof a === 'string' || typeof b === 'string') return `${isNa(a) ? 'NaN' : a}${isNa(b) ? 'NaN' : b}`;
+        return a + b;
+      case '-': return a - b;
+      case '*': return a * b;
+      case '/': return a / b;
+      case '%': return a % b;
+      case '<': return !isNa(a) && !isNa(b) && a < b;
+      case '>': return !isNa(a) && !isNa(b) && a > b;
+      case '<=': return !isNa(a) && !isNa(b) && a <= b;
+      case '>=': return !isNa(a) && !isNa(b) && a >= b;
+      case '==': return !isNa(a) && !isNa(b) && a === b;
+      case '!=': return !isNa(a) && !isNa(b) && a !== b;
+      default: throw new Error(`unknown operator ${op}`);
+    }
+  }
+
+  eval(n, ctx) {
+    switch (n.type) {
+      case 'Num': case 'Str': case 'Bool': case 'Color': return n.value;
+      case 'Ident': return this.lookupIdent(n, ctx);
+      case 'Call': return this.evalCall(n, ctx);
+      case 'History': return this.evalHistory(n, ctx);
+      case 'Unary': {
+        const v = this.eval(n.arg, ctx);
+        if (n.op === 'not') return !this.truthy(v);
+        return n.op === '-' ? -v : +v;
+      }
+      case 'Binary': return this.binary(n.op, this.eval(n.left, ctx), this.eval(n.right, ctx));
+      case 'Logical': {
+        const l = this.truthy(this.eval(n.left, ctx));
+        if (n.op === 'and') return l && this.truthy(this.eval(n.right, ctx));
+        return l || this.truthy(this.eval(n.right, ctx));
+      }
+      case 'Ternary': return this.truthy(this.eval(n.test, ctx)) ? this.eval(n.cons, ctx) : this.eval(n.alt, ctx);
+      case 'Tuple': return n.items.map((x) => this.eval(x, ctx));
+      case 'If': return this.evalIf(n, ctx);
+      case 'Switch': return this.evalSwitch(n, ctx);
+      default: throw new PineRuntimeError(`cannot evaluate ${n.type}`, n.line);
+    }
+  }
+
+  evalHistory(n, ctx) {
+    const off = Math.round(this.eval(n.offset, ctx));
+    if (isNa(off) || off < 0) throw new PineRuntimeError('history reference offset must be a non-negative number', n.line);
+    const t = n.target;
+    if (t.type === 'Ident') {
+      const slot = ctx.scope.lookup(t.name);
+      if (slot) return this.slotAt(slot, off);
+      if (!t.name.startsWith('ta.') && this.builtinVar(t.name, this.bar) !== undefined) {
+        const v = this.builtinVar(t.name, this.bar - off);
+        return v === undefined ? NaN : v;
+      }
+    }
+    // generic: keep a per-call-site history of the expression's value
+    const key = `${ctx.path}:h${n.id}`;
+    let arr = this.exprHist.get(key);
+    if (!arr) { arr = []; this.exprHist.set(key, arr); }
+    const v = this.eval(t, ctx);
+    arr[this.bar] = v;
+    const i = this.bar - off;
+    if (i < 0) return NaN;
+    return arr[i] === undefined ? NaN : arr[i];
+  }
+
+  callKey(n, ctx) {
+    return ctx.path ? `${ctx.path}:${n.id}` : n.id;
+  }
+
+  evalCall(n, ctx) {
+    let name = n.callee;
+    if (n.method) {
+      const obj = this.eval(n.args[0], ctx);
+      const prefix = obj && obj.__array ? 'array.' : typeof obj === 'string' ? 'str.' : 'math.';
+      return this.callBuiltin(prefix + name, n, ctx, [obj, ...n.args.slice(1).map((a) => this.eval(a, ctx))]);
+    }
+    const user = this.functions.get(name);
+    if (user) return this.callUser(user, n, ctx);
+    if (this.builtins[name]) return this.callBuiltin(name, n, ctx);
+    // method-call syntax on a variable: myArray.push(x)
+    const dot = name.indexOf('.');
+    if (dot > 0) {
+      const slot = ctx.scope.lookup(name.slice(0, dot));
+      if (slot) {
+        const obj = slot.value;
+        const rest = name.slice(dot + 1);
+        const prefix = obj && obj.__array ? 'array.' : typeof obj === 'string' ? 'str.' : 'math.';
+        return this.callBuiltin(prefix + rest, n, ctx, [obj, ...n.args.map((a) => this.eval(a, ctx))]);
+      }
+    }
+    if (/^(label|line|box|table|linefill|polyline|chart\.point|log|runtime)\./.test(name) || name === 'alert' || name === 'alertcondition' || name === 'fill' || name === 'library') {
+      for (const a of n.args) this.eval(a, ctx);
+      return NaN;
+    }
+    if (name.startsWith('request.')) {
+      throw new PineRuntimeError(`${name}() is not supported yet (only the chart's own symbol/timeframe can be backtested)`, n.line);
+    }
+    throw new PineRuntimeError(`Could not find function or function reference '${name}'`, n.line);
+  }
+
+  callUser(f, n, ctx) {
+    if (++this.depth > 200) throw new PineRuntimeError('too much recursion', n.line);
+    try {
+      const path = ctx.path ? `${ctx.path}>${n.id}` : String(n.id);
+      const scope = new Scope(this.globalScope);
+      f.params.forEach((p, i) => {
+        let v;
+        if (i < n.args.length) v = this.eval(n.args[i], ctx);
+        else if (n.named[p.name]) v = this.eval(n.named[p.name], ctx);
+        else if (p.def) v = this.eval(p.def, ctx);
+        else v = NaN;
+        const slot = this.getSlot(`${path}#p${i}`, false);
+        slot.value = v;
+        slot.hist[this.bar] = v;
+        scope.set(p.name, slot);
+      });
+      let v = NaN;
+      const inner = { path, scope };
+      for (const s of f.body.body) v = this.exec(s, inner);
+      return v;
+    } finally {
+      this.depth--;
+    }
+  }
+
+  callBuiltin(name, n, ctx, preArgs) {
+    const def = this.builtins[name];
+    if (!def) throw new PineRuntimeError(`Could not find function '${name}'`, n.line);
+    const [params, fn] = def;
+    let args;
+    if (preArgs) args = preArgs;
+    else if (params === '...') args = n.args.map((a) => this.eval(a, ctx));
+    else {
+      args = new Array(params.length);
+      n.args.forEach((a, i) => { args[i] = this.eval(a, ctx); });
+      // unknown named arguments are ignored (cosmetic params like editable=, display=)
+      for (const [k, a] of Object.entries(n.named)) {
+        const i = params.indexOf(k);
+        if (i >= 0) args[i] = this.eval(a, ctx);
+      }
+    }
+    return fn(args, this.callKey(n, ctx), n, ctx);
+  }
+}
+
+// ---------------------------------------------------------------- builtins
+function buildBuiltins(rt) {
+  const B = {};
+  const def = (name, params, fn) => { B[name] = [params, fn]; };
+  const n = (v) => (isNa(v) ? NaN : +v);
+
+  // ta.*
+  for (const [k, [params, impl]] of Object.entries(TA)) {
+    def(`ta.${k}`, params, (a, key) => impl(rt, key, ...trimUndef(a)));
+  }
+  // v4 compatibility: sma(), ema(), crossover(), ...
+  for (const k of Object.keys(TA)) if (!B[k]) B[k] = B[`ta.${k}`];
+
+  // general
+  def('na', ['x'], ([x]) => isNa(x));
+  def('nz', ['source', 'replacement'], ([x, r]) => (isNa(x) ? (r === undefined ? 0 : r) : x));
+  def('fixnan', ['source'], ([x], key) => fixnan(rt, key, x));
+  def('int', ['x'], ([x]) => (isNa(x) ? NaN : Math.trunc(x)));
+  def('float', ['x'], ([x]) => n(x));
+  def('bool', ['x'], ([x]) => rt.truthy(x));
+  def('string', ['x'], ([x]) => String(x));
+  def('max_bars_back', ['var', 'num'], () => NaN);
+  def('timestamp', '...', (args) => {
+    if (args.length === 1 && typeof args[0] === 'string') {
+      const t = Date.parse(args[0]);
+      return Number.isNaN(t) ? NaN : t;
+    }
+    let tz = rt.tz;
+    if (typeof args[0] === 'string') tz = args.shift();
+    const [y, mo = 1, d = 1, h = 0, mi = 0, s = 0] = args;
+    return zonedToUtc(y, mo, d, h, mi, s, tz);
+  });
+  for (const [fname, field] of [['year', 'y'], ['month', 'mo'], ['dayofmonth', 'd'], ['dayofweek', 'wd'], ['hour', 'h'], ['minute', 'mi'], ['second', 's']]) {
+    def(fname, ['time', 'timezone'], ([t, tz]) => (isNa(t) ? NaN : timeParts(t, tz || rt.tz)[field]));
+  }
+  def('weekofyear', ['time', 'timezone'], ([t]) => weekOfYear(t));
+  const sessionTime = (tf, session, tz, close) => {
+    const t = rt.data.time[rt.bar];
+    if (!session) return close ? t + rt.tf.seconds * 1000 : t;
+    return inSession(t, session, tz || rt.tz) ? (close ? t + rt.tf.seconds * 1000 : t) : NaN;
+  };
+  def('time', ['timeframe', 'session', 'timezone'], ([tf, s, tz]) => sessionTime(tf, s, tz, false));
+  def('time_close', ['timeframe', 'session', 'timezone'], ([tf, s, tz]) => sessionTime(tf, s, tz, true));
+  def('timeframe.in_seconds', ['timeframe'], ([tf]) => tfSeconds(tf === undefined ? rt.tf.period : tf));
+  def('timeframe.change', ['timeframe'], ([tf]) => {
+    const b = rt.bar;
+    if (b === 0) return true;
+    const sec = tfSeconds(tf) * 1000;
+    return Math.floor(rt.data.time[b] / sec) !== Math.floor(rt.data.time[b - 1] / sec);
+  });
+
+  // math.*
+  const m1 = (f) => ([x]) => (isNa(x) ? NaN : f(x));
+  def('math.abs', ['number'], m1(Math.abs));
+  def('math.ceil', ['number'], m1(Math.ceil));
+  def('math.floor', ['number'], m1(Math.floor));
+  def('math.sqrt', ['number'], m1(Math.sqrt));
+  def('math.log', ['number'], m1(Math.log));
+  def('math.log10', ['number'], m1(Math.log10));
+  def('math.exp', ['number'], m1(Math.exp));
+  def('math.sign', ['number'], m1(Math.sign));
+  def('math.sin', ['angle'], m1(Math.sin));
+  def('math.cos', ['angle'], m1(Math.cos));
+  def('math.tan', ['angle'], m1(Math.tan));
+  def('math.asin', ['angle'], m1(Math.asin));
+  def('math.acos', ['angle'], m1(Math.acos));
+  def('math.atan', ['angle'], m1(Math.atan));
+  def('math.todegrees', ['radians'], m1((x) => (x * 180) / Math.PI));
+  def('math.toradians', ['degrees'], m1((x) => (x * Math.PI) / 180));
+  def('math.pow', ['base', 'exponent'], ([a, b]) => Math.pow(a, b));
+  def('math.round', ['number', 'precision'], ([x, p]) => {
+    if (isNa(x)) return NaN;
+    if (p === undefined) return Math.sign(x) * Math.round(Math.abs(x));
+    const f = Math.pow(10, p);
+    return Math.sign(x) * Math.round(Math.abs(x) * f) / f;
+  });
+  def('math.round_to_mintick', ['number'], ([x]) => Math.round(x / rt.mintick) * rt.mintick);
+  def('math.max', '...', (a) => (a.some(isNa) ? NaN : Math.max(...a)));
+  def('math.min', '...', (a) => (a.some(isNa) ? NaN : Math.min(...a)));
+  def('math.avg', '...', (a) => a.reduce((s, x) => s + x, 0) / a.length);
+  def('math.sum', ['source', 'length'], ([s, l], key) => rollingSum(rt, key, s, l));
+  def('math.random', ['min', 'max', 'seed'], ([lo = 0, hi = 1]) => lo + Math.random() * (hi - lo));
+  for (const k of ['abs', 'ceil', 'floor', 'sqrt', 'log', 'log10', 'exp', 'sign', 'pow', 'round', 'max', 'min', 'avg', 'sum']) {
+    if (!B[k]) B[k] = B[`math.${k}`];
+  }
+
+  // str.*
+  def('str.tostring', ['value', 'format'], ([v, f]) => fmtNumber(v, f, rt.mintick));
+  B.tostring = B['str.tostring'];
+  def('str.tonumber', ['string'], ([s]) => { const v = parseFloat(s); return Number.isNaN(v) ? NaN : v; });
+  def('str.length', ['string'], ([s]) => String(s).length);
+  def('str.contains', ['source', 'str'], ([s, x]) => String(s).includes(x));
+  def('str.startswith', ['source', 'str'], ([s, x]) => String(s).startsWith(x));
+  def('str.endswith', ['source', 'str'], ([s, x]) => String(s).endsWith(x));
+  def('str.upper', ['source'], ([s]) => String(s).toUpperCase());
+  def('str.lower', ['source'], ([s]) => String(s).toLowerCase());
+  def('str.replace_all', ['source', 'target', 'replacement'], ([s, a, b]) => String(s).split(a).join(b));
+  def('str.substring', ['source', 'begin_pos', 'end_pos'], ([s, a, b]) => String(s).substring(a, b));
+  def('str.format', '...', ([f, ...vals]) => String(f).replace(/\{(\d+)(?:,number,([^}]*))?\}/g, (_, i, fmt) => fmtNumber(vals[+i], fmt, rt.mintick)));
+  def('str.split', ['string', 'separator'], ([s, sep]) => ({ __array: true, items: String(s).split(sep) }));
+
+  // color.*
+  def('color.new', ['color', 'transp'], ([c, t]) => {
+    const p = parseColor(c);
+    return p ? makeColor(p.r, p.g, p.b, t) : c;
+  });
+  def('color.rgb', ['red', 'green', 'blue', 'transp'], ([r, g, b, t = 0]) => makeColor(r, g, b, t));
+  def('color.r', ['color'], ([c]) => (parseColor(c) || {}).r ?? NaN);
+  def('color.g', ['color'], ([c]) => (parseColor(c) || {}).g ?? NaN);
+  def('color.b', ['color'], ([c]) => (parseColor(c) || {}).b ?? NaN);
+  def('color.t', ['color'], ([c]) => { const p = parseColor(c); return p ? Math.round(100 - (p.a / 255) * 100) : NaN; });
+  def('color.from_gradient', ['value', 'bottom_value', 'top_value', 'bottom_color', 'top_color'], ([v, lo, hi, c1, c2]) => {
+    const a = parseColor(c1), b = parseColor(c2);
+    if (!a || !b || isNa(v)) return NaN;
+    const t = Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+    return makeColor(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, 100 - ((a.a + (b.a - a.a) * t) / 255) * 100);
+  });
+
+  // declarations
+  const declare = (kind) => (a) => {
+    if (rt.bar !== 0) return NaN;
+    rt.declaration = { kind, title: a[0] ?? 'Script', overlay: !!a[2] };
+    if (kind === 'strategy') {
+      const cfg = {
+        pyramiding: a[6], default_qty_type: a[11], default_qty_value: a[12], initial_capital: a[13],
+        currency: a[14], slippage: a[15], commission_type: a[16], commission_value: a[17],
+        process_orders_on_close: a[18], close_entries_rule: a[19],
+      };
+      rt.broker = new Broker(rt.data, rt.mintick, rt.opts.properties || {});
+      rt.broker.configure(cfg);
+      rt.broker.bar = 0;
+    }
+    return NaN;
+  };
+  const STRATEGY_PARAMS = ['title', 'shorttitle', 'overlay', 'format', 'precision', 'scale', 'pyramiding', 'calc_on_order_fills',
+    'calc_on_every_tick', 'max_bars_back', 'backtest_fill_limits_assumption', 'default_qty_type', 'default_qty_value',
+    'initial_capital', 'currency', 'slippage', 'commission_type', 'commission_value', 'process_orders_on_close',
+    'close_entries_rule', 'margin_long', 'margin_short', 'explicit_plot_zorder', 'max_lines_count', 'max_labels_count',
+    'max_boxes_count', 'calc_bars_count', 'risk_free_rate', 'use_bar_magnifier', 'fill_orders_on_standard_ohlc',
+    'max_polylines_count', 'dynamic_requests', 'behind_chart'];
+  def('strategy', STRATEGY_PARAMS, declare('strategy'));
+  const INDICATOR_PARAMS = ['title', 'shorttitle', 'overlay', 'format', 'precision', 'scale', 'max_bars_back', 'timeframe',
+    'timeframe_gaps', 'explicit_plot_zorder', 'max_lines_count', 'max_labels_count', 'max_boxes_count', 'calc_bars_count',
+    'max_polylines_count', 'dynamic_requests', 'behind_chart'];
+  def('indicator', INDICATOR_PARAMS, declare('indicator'));
+  B.study = B.indicator;
+
+  // inputs
+  const input = (type, params) => (a, key, node) => {
+    const p = Object.fromEntries(params.map((k, i) => [k, a[i]]));
+    const inKey = p.title || `${type} input ${rt.inputs.size + 1}`;
+    let defval = p.defval;
+    const arg0 = node.args[0] || node.named.defval;
+    if (type === 'auto' && arg0 && arg0.type === 'Ident' && SOURCES.includes(arg0.name)) type = 'source';
+    if (type === 'source') defval = arg0 && arg0.type === 'Ident' ? arg0.name : 'close';
+    if (type === 'auto') {
+      type = typeof defval === 'boolean' ? 'bool' : typeof defval === 'string' ? 'string' : Number.isInteger(defval) ? 'int' : 'float';
+    }
+    if (!rt.inputs.has(key)) {
+      rt.inputs.set(key, {
+        key: inKey, title: p.title || inKey, type, defval,
+        options: p.options && p.options.__array ? p.options.items : undefined,
+        minval: p.minval, maxval: p.maxval, step: p.step, group: p.group, tooltip: p.tooltip, inline: p.inline,
+      });
+    }
+    const ov = rt.inputOverrides[inKey];
+    const v = ov !== undefined ? ov : defval;
+    if (type === 'source') {
+      const src = SOURCES.includes(v) ? v : 'close';
+      return rt.builtinVar(src, rt.bar);
+    }
+    if (type === 'int') return Math.round(+v);
+    if (type === 'float' || type === 'price') return +v;
+    if (type === 'bool') return v === true || v === 'true';
+    if (type === 'time') return +v;
+    return v;
+  };
+  const NUM = ['defval', 'title', 'minval', 'maxval', 'step', 'tooltip', 'inline', 'group', 'confirm', 'display'];
+  def('input', ['defval', 'title', 'tooltip', 'inline', 'group'], input('auto', ['defval', 'title', 'tooltip', 'inline', 'group']));
+  def('input.int', [...NUM, 'options'], input('int', [...NUM, 'options']));
+  def('input.float', [...NUM, 'options'], input('float', [...NUM, 'options']));
+  const BOOLP = ['defval', 'title', 'tooltip', 'inline', 'group', 'confirm', 'display'];
+  def('input.bool', BOOLP, input('bool', BOOLP));
+  const STRP = ['defval', 'title', 'options', 'tooltip', 'inline', 'group', 'confirm', 'display'];
+  def('input.string', STRP, input('string', STRP));
+  def('input.timeframe', STRP, input('string', STRP));
+  def('input.session', STRP, input('string', STRP));
+  def('input.symbol', STRP, input('string', STRP));
+  def('input.text_area', STRP, input('string', STRP));
+  def('input.color', BOOLP, input('color', BOOLP));
+  def('input.price', BOOLP, input('price', BOOLP));
+  def('input.time', BOOLP, input('time', BOOLP));
+  def('input.source', ['defval', 'title', 'tooltip', 'inline', 'group', 'display'], input('source', ['defval', 'title', 'tooltip', 'inline', 'group', 'display']));
+  def('input.enum', STRP, input('string', STRP));
+
+  // plotting
+  const overlayFor = (force) => (force ? true : rt.declaration ? rt.declaration.overlay : true);
+  def('plot', ['series', 'title', 'color', 'linewidth', 'style', 'trackprice', 'histbase', 'offset', 'join', 'editable',
+    'show_last', 'display', 'format', 'precision', 'force_overlay', 'linestyle'], (a, key) => {
+    let p = rt.plots.get(key);
+    if (!p) {
+      p = {
+        id: key, title: a[1] || `Plot ${rt.plots.size + 1}`, style: a[4] || 'line', linewidth: a[3] || 1,
+        overlay: overlayFor(a[14]), offset: a[7] || 0, histbase: a[6] || 0,
+        values: new Array(rt.n).fill(NaN), colors: new Array(rt.n).fill(null),
+        display: a[11],
+      };
+      rt.plots.set(key, p);
+    }
+    const v = a[0];
+    p.values[rt.bar] = typeof v === 'boolean' ? +v : n(v);
+    p.colors[rt.bar] = isNa(a[2]) ? null : a[2] || '#2196F3';
+    return key;
+  });
+  const shape = (isChar) => (a, key) => {
+    let s = rt.shapes.get(key);
+    const [series, title] = a;
+    if (!s) {
+      s = {
+        id: key, title: title || `Shape ${rt.shapes.size + 1}`, points: [], overlay: overlayFor(isChar ? a[13] : a[14]),
+        style: isChar ? 'char' : a[2] || 'xcross', char: isChar ? a[2] : undefined,
+        location: a[3] || 'abovebar', size: isChar ? a[9] : a[9],
+      };
+      rt.shapes.set(key, s);
+    }
+    const on = typeof series === 'boolean' ? series : !isNa(series) && series !== 0;
+    if (on) s.points.push({ bar: rt.bar, color: a[4] || '#2196F3', text: a[6] || (isChar ? a[2] : ''), value: n(series) });
+    return key;
+  };
+  const SHAPEP = ['series', 'title', 'style', 'location', 'color', 'offset', 'text', 'textcolor', 'editable', 'size',
+    'show_last', 'display', 'format', 'force_overlay'];
+  def('plotshape', [...SHAPEP.slice(0, 13), 'precision', 'force_overlay'], shape(false));
+  def('plotchar', ['series', 'title', 'char', 'location', 'color', 'offset', 'text', 'textcolor', 'editable', 'size',
+    'show_last', 'display', 'format', 'force_overlay'], shape(true));
+  def('plotarrow', ['series', 'title', 'colorup', 'colordown', 'offset', 'minheight', 'maxheight', 'editable', 'show_last', 'display'], (a, key) => {
+    let s = rt.shapes.get(key);
+    if (!s) {
+      s = { id: key, title: a[1] || 'Arrows', points: [], overlay: overlayFor(false), style: 'arrow', location: 'auto' };
+      rt.shapes.set(key, s);
+    }
+    const v = n(a[0]);
+    if (v > 0) s.points.push({ bar: rt.bar, color: a[2] || '#4CAF50', text: '', value: v, up: true });
+    else if (v < 0) s.points.push({ bar: rt.bar, color: a[3] || '#FF5252', text: '', value: v, up: false });
+    return key;
+  });
+  def('hline', ['price', 'title', 'color', 'linestyle', 'linewidth', 'editable', 'display'], (a, key) => {
+    if (!rt.hlines.has(key)) {
+      rt.hlines.set(key, { id: key, price: a[0], title: a[1] || '', color: a[2] || '#787B86', linestyle: a[3] || 'dashed', linewidth: a[4] || 1, overlay: overlayFor(false) });
+    }
+    return key;
+  });
+  def('bgcolor', ['color', 'offset', 'editable', 'show_last', 'title', 'display', 'force_overlay'], ([c]) => {
+    if (!rt.bgcolors) rt.bgcolors = new Array(rt.n).fill(null);
+    rt.bgcolors[rt.bar] = isNa(c) ? null : c;
+    return NaN;
+  });
+  def('barcolor', ['color', 'offset', 'editable', 'show_last', 'title', 'display'], ([c]) => {
+    if (!rt.barcolors) rt.barcolors = new Array(rt.n).fill(null);
+    rt.barcolors[rt.bar] = isNa(c) ? null : c;
+    return NaN;
+  });
+
+  // strategy.*
+  const br = () => {
+    if (!rt.broker) throw new Error('strategy functions need a strategy() declaration');
+    return rt.broker;
+  };
+  const dirOf = (d) => (d === 'long' || d === true ? 1 : d === 'short' || d === false ? -1 : NaN);
+  const when = (w) => w === undefined || rt.truthy(w);
+  def('strategy.entry', ['id', 'direction', 'qty', 'limit', 'stop', 'oca_name', 'oca_type', 'comment', 'alert_message', 'disable_alert', 'when'],
+    ([id, d, qty, limit, stop, ocaName, ocaType, comment, , , w]) => {
+      if (!when(w)) return NaN;
+      const dir = dirOf(d);
+      if (Number.isNaN(dir)) throw new Error('strategy.entry: direction must be strategy.long or strategy.short');
+      br().entry({ id, dir, qty, limit, stop, comment, ocaName, ocaType });
+      return NaN;
+    });
+  def('strategy.order', ['id', 'direction', 'qty', 'limit', 'stop', 'oca_name', 'oca_type', 'comment', 'alert_message', 'disable_alert', 'when'],
+    ([id, d, qty, limit, stop, ocaName, ocaType, comment, , , w]) => {
+      if (!when(w)) return NaN;
+      br().order({ id, dir: dirOf(d), qty, limit, stop, comment, ocaName, ocaType });
+      return NaN;
+    });
+  def('strategy.exit', ['id', 'from_entry', 'qty', 'qty_percent', 'profit', 'limit', 'loss', 'stop', 'trail_price', 'trail_points',
+    'trail_offset', 'oca_name', 'comment', 'comment_profit', 'comment_loss', 'comment_trailing', 'alert_message',
+    'alert_profit', 'alert_loss', 'alert_trailing', 'disable_alert', 'when'], (a) => {
+    if (!when(a[21])) return NaN;
+    br().exit({
+      id: a[0], fromEntry: a[1], qty: a[2], qtyPercent: a[3], profit: a[4], limit: a[5], loss: a[6], stop: a[7],
+      trailPrice: a[8], trailPoints: a[9], trailOffset: a[10], comment: a[12], commentProfit: a[13],
+      commentLoss: a[14], commentTrailing: a[15],
+    });
+    return NaN;
+  });
+  def('strategy.close', ['id', 'comment', 'qty', 'qty_percent', 'alert_message', 'immediately', 'disable_alert', 'when'],
+    ([id, comment, qty, qtyPercent, , immediately, , w]) => {
+      if (!when(w)) return NaN;
+      br().close({ id, comment, qty, qtyPercent, immediately });
+      return NaN;
+    });
+  def('strategy.close_all', ['comment', 'alert_message', 'immediately', 'disable_alert', 'when'], ([comment, , immediately, , w]) => {
+    if (!when(w)) return NaN;
+    br().closeAll({ comment, immediately });
+    return NaN;
+  });
+  def('strategy.cancel', ['id', 'when'], ([id, w]) => { if (when(w)) br().cancel(id); return NaN; });
+  def('strategy.cancel_all', ['when'], ([w]) => { if (when(w)) br().cancelAll(); return NaN; });
+  def('strategy.risk.allow_entry_in', ['value'], () => NaN);
+  def('strategy.risk.max_drawdown', ['value', 'type', 'alert_message'], () => NaN);
+  def('strategy.risk.max_intraday_loss', ['value', 'type', 'alert_message'], () => NaN);
+  def('strategy.risk.max_position_size', ['contracts'], () => NaN);
+  def('strategy.risk.max_cons_loss_days', ['count', 'alert_message'], () => NaN);
+  def('strategy.risk.max_intraday_filled_orders', ['count', 'alert_message'], () => NaN);
+  const closedField = (f) => ([i]) => { const t = br().closed[i]; return t ? f(t) : NaN; };
+  def('strategy.closedtrades.profit', ['trade_num'], closedField((t) => t.profit));
+  def('strategy.closedtrades.entry_price', ['trade_num'], closedField((t) => t.entryPrice));
+  def('strategy.closedtrades.exit_price', ['trade_num'], closedField((t) => t.exitPrice));
+  def('strategy.closedtrades.entry_bar_index', ['trade_num'], closedField((t) => t.entryBar));
+  def('strategy.closedtrades.exit_bar_index', ['trade_num'], closedField((t) => t.exitBar));
+  def('strategy.closedtrades.entry_time', ['trade_num'], closedField((t) => t.entryTime));
+  def('strategy.closedtrades.exit_time', ['trade_num'], closedField((t) => t.exitTime));
+  def('strategy.closedtrades.size', ['trade_num'], closedField((t) => t.dir * t.qty));
+  def('strategy.closedtrades.entry_id', ['trade_num'], closedField((t) => t.entryId));
+  def('strategy.closedtrades.exit_id', ['trade_num'], closedField((t) => t.exitId));
+  def('strategy.closedtrades.commission', ['trade_num'], closedField((t) => t.commission));
+  def('strategy.closedtrades.max_runup', ['trade_num'], closedField((t) => t.runup));
+  def('strategy.closedtrades.max_drawdown', ['trade_num'], closedField((t) => t.drawdown));
+  const openField = (f) => ([i]) => { const t = br().open[i]; return t ? f(t) : NaN; };
+  def('strategy.opentrades.entry_price', ['trade_num'], openField((t) => t.entryPrice));
+  def('strategy.opentrades.entry_bar_index', ['trade_num'], openField((t) => t.entryBar));
+  def('strategy.opentrades.entry_time', ['trade_num'], openField((t) => t.entryTime));
+  def('strategy.opentrades.entry_id', ['trade_num'], openField((t) => t.entryId));
+  def('strategy.opentrades.size', ['trade_num'], openField((t) => t.dir * t.qty));
+  def('strategy.opentrades.profit', ['trade_num'], openField((t) => t.dir * (rt.data.close[rt.bar] - t.entryPrice) * t.qty));
+  def('strategy.opentrades.commission', ['trade_num'], openField((t) => t.entryCommission));
+  def('strategy.opentrades.max_runup', ['trade_num'], openField((t) => t.maxFav));
+  def('strategy.opentrades.max_drawdown', ['trade_num'], openField((t) => t.maxAdv));
+
+  // array.*
+  const arr = (items) => ({ __array: true, items });
+  const A = (x) => {
+    if (!x || !x.__array) throw new Error('expected an array');
+    return x.items;
+  };
+  const idx = (a, i) => (i < 0 ? a.length + i : i);
+  for (const t of ['float', 'int', 'bool', 'string', 'color', 'line', 'label', 'box', 'table']) {
+    def(`array.new_${t}`, ['size', 'initial_value'], ([size = 0, init]) => arr(new Array(size).fill(init === undefined ? NaN : init)));
+  }
+  def('array.new', ['size', 'initial_value'], ([size = 0, init]) => arr(new Array(size).fill(init === undefined ? NaN : init)));
+  def('array.from', '...', (a) => arr([...a]));
+  def('array.push', ['id', 'value'], ([a, v]) => { A(a).push(v); return NaN; });
+  def('array.pop', ['id'], ([a]) => { const x = A(a).pop(); return x === undefined ? NaN : x; });
+  def('array.shift', ['id'], ([a]) => { const x = A(a).shift(); return x === undefined ? NaN : x; });
+  def('array.unshift', ['id', 'value'], ([a, v]) => { A(a).unshift(v); return NaN; });
+  def('array.insert', ['id', 'index', 'value'], ([a, i, v]) => { A(a).splice(i, 0, v); return NaN; });
+  def('array.remove', ['id', 'index'], ([a, i]) => { const x = A(a).splice(idx(A(a), i), 1); return x.length ? x[0] : NaN; });
+  def('array.get', ['id', 'index'], ([a, i]) => {
+    const items = A(a), j = idx(items, i);
+    if (j < 0 || j >= items.length) throw new Error(`array index ${i} is out of bounds (size ${items.length})`);
+    return items[j];
+  });
+  def('array.set', ['id', 'index', 'value'], ([a, i, v]) => {
+    const items = A(a), j = idx(items, i);
+    if (j < 0 || j >= items.length) throw new Error(`array index ${i} is out of bounds (size ${items.length})`);
+    items[j] = v;
+    return NaN;
+  });
+  def('array.size', ['id'], ([a]) => A(a).length);
+  def('array.clear', ['id'], ([a]) => { A(a).length = 0; return NaN; });
+  def('array.first', ['id'], ([a]) => A(a)[0] ?? NaN);
+  def('array.last', ['id'], ([a]) => A(a)[A(a).length - 1] ?? NaN);
+  def('array.includes', ['id', 'value'], ([a, v]) => A(a).includes(v));
+  def('array.indexof', ['id', 'value'], ([a, v]) => A(a).indexOf(v));
+  def('array.lastindexof', ['id', 'value'], ([a, v]) => A(a).lastIndexOf(v));
+  def('array.copy', ['id'], ([a]) => arr([...A(a)]));
+  def('array.slice', ['id', 'index_from', 'index_to'], ([a, f, t]) => arr(A(a).slice(f, t)));
+  def('array.concat', ['id1', 'id2'], ([a, b]) => { A(a).push(...A(b)); return a; });
+  def('array.reverse', ['id'], ([a]) => { A(a).reverse(); return NaN; });
+  def('array.fill', ['id', 'value', 'index_from', 'index_to'], ([a, v, f = 0, t]) => { A(a).fill(v, f, t); return NaN; });
+  def('array.join', ['id', 'separator'], ([a, s = ',']) => A(a).map((x) => fmtNumber(x, undefined, rt.mintick)).join(s));
+  def('array.sort', ['id', 'order'], ([a, o = 'asc']) => { A(a).sort((x, y) => (o === 'desc' ? y - x : x - y)); return NaN; });
+  const nums = (a) => A(a).filter((x) => !isNa(x));
+  def('array.sum', ['id'], ([a]) => nums(a).reduce((s, x) => s + x, 0));
+  def('array.avg', ['id'], ([a]) => { const v = nums(a); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : NaN; });
+  def('array.max', ['id', 'nth'], ([a, k = 0]) => { const v = [...nums(a)].sort((x, y) => y - x); return v[k] ?? NaN; });
+  def('array.min', ['id', 'nth'], ([a, k = 0]) => { const v = [...nums(a)].sort((x, y) => x - y); return v[k] ?? NaN; });
+  def('array.range', ['id'], ([a]) => { const v = nums(a); return v.length ? Math.max(...v) - Math.min(...v) : NaN; });
+  def('array.median', ['id'], ([a]) => {
+    const v = [...nums(a)].sort((x, y) => x - y);
+    if (!v.length) return NaN;
+    const h = Math.floor(v.length / 2);
+    return v.length % 2 ? v[h] : (v[h - 1] + v[h]) / 2;
+  });
+  def('array.stdev', ['id', 'biased'], ([a, biased = true]) => {
+    const v = nums(a);
+    if (!v.length) return NaN;
+    const mean = v.reduce((s, x) => s + x, 0) / v.length;
+    return Math.sqrt(v.reduce((s, x) => s + (x - mean) ** 2, 0) / (biased ? v.length : v.length - 1));
+  });
+  def('array.variance', ['id', 'biased'], (args) => B['array.stdev'][1](args) ** 2);
+  def('array.every', ['id'], ([a]) => A(a).every((x) => rt.truthy(x)));
+  def('array.some', ['id'], ([a]) => A(a).some((x) => rt.truthy(x)));
+
+  return B;
+}
+
+function trimUndef(a) {
+  let end = a.length;
+  while (end > 0 && a[end - 1] === undefined) end--;
+  return a.slice(0, end);
+}
+
+function tfSeconds(tf) {
+  const s = String(tf);
+  const m = /^(\d*)([SDWM]?)$/.exec(s);
+  if (!m) return 60;
+  const k = m[1] ? +m[1] : 1;
+  switch (m[2]) {
+    case 'S': return k;
+    case 'D': return k * 86400;
+    case 'W': return k * 604800;
+    case 'M': return k * 2628003;
+    default: return k * 60;
+  }
+}
+
+function inSession(ms, session, tz) {
+  if (!session || session === '24x7') return true;
+  const [range, days] = String(session).split(':');
+  const p = timeParts(ms, tz);
+  if (days && !days.includes(String(p.wd))) return false;
+  const m = /^(\d{2})(\d{2})-(\d{2})(\d{2})$/.exec(range);
+  if (!m) return true;
+  const start = +m[1] * 60 + +m[2];
+  const end = +m[3] * 60 + +m[4];
+  const t = p.h * 60 + p.mi;
+  if (start === end) return true;
+  return start < end ? t >= start && t < end : t >= start || t < end;
+}
+
+// Convenience wrapper.
+function runScript(source, data, options) {
+  return new Runtime(source, data, options).run();
+}
+
+return { PineRuntimeError, SOURCES, Runtime, runScript };
+})();
+
+const __m_data = (() => {
+// OHLCV data loading: CSV (including TradingView's "Export chart data" file),
+// a public crypto exchange feed, and a synthetic sample series.
+
+function parseTime(v) {
+  const s = String(v).trim().replace(/^"|"$/g, '');
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const x = +s;
+    return x > 1e11 ? x : x * 1000; // ms vs seconds
+  }
+  // 2024-01-02, 2024-01-02 09:30, 2024-01-02T09:30:00 (no zone -> UTC), 2024.01.02
+  const m = /^(\d{4})[-./](\d{1,2})[-./](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(s);
+  if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+  // 01/02/2024 (US style)
+  const u = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(s);
+  if (u) return Date.UTC(+u[3], +u[1] - 1, +u[2], +(u[4] || 0), +(u[5] || 0), +(u[6] || 0));
+  const t = Date.parse(s);
+  return Number.isNaN(t) ? NaN : t;
+}
+
+function splitLine(line, delim) {
+  const out = [];
+  let cur = '', q = false;
+  for (const c of line) {
+    if (c === '"') q = !q;
+    else if (c === delim && !q) { out.push(cur); cur = ''; } else cur += c;
+  }
+  out.push(cur);
+  return out.map((x) => x.trim());
+}
+
+function parseCSV(text) {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n').filter((l) => l.trim());
+  if (lines.length < 2) throw new Error('CSV needs a header row and at least one data row');
+  const first = lines[0];
+  const delim = [',', ';', '\t'].sort((a, b) => first.split(b).length - first.split(a).length)[0];
+  const header = splitLine(first, delim).map((h) => h.toLowerCase().replace(/[<>"]/g, '').trim());
+  const find = (...names) => header.findIndex((h) => names.includes(h));
+  let iTime = find('time', 'timestamp', 'datetime', 'date time', 'open time', 'opentime', 'unix', 'date');
+  const iDate = find('date', 'day');
+  const iClock = find('time');
+  const combineDateTime = iDate >= 0 && iClock >= 0 && iDate !== iClock;
+  if (combineDateTime) iTime = iDate;
+  const iOpen = find('open', 'o');
+  const iHigh = find('high', 'h');
+  const iLow = find('low', 'l');
+  const iClose = find('close', 'c', 'last', 'price');
+  const iVol = find('volume', 'vol', 'v', 'volume usdt', 'basic volume');
+  if ([iTime, iOpen, iHigh, iLow, iClose].some((i) => i < 0)) {
+    throw new Error(`CSV must have time, open, high, low and close columns (found: ${header.join(', ')})`);
+  }
+  const rows = [];
+  for (let k = 1; k < lines.length; k++) {
+    const c = splitLine(lines[k], delim);
+    const t = combineDateTime ? parseTime(`${c[iDate]} ${c[iClock]}`) : parseTime(c[iTime]);
+    const r = [t, +c[iOpen], +c[iHigh], +c[iLow], +c[iClose], iVol >= 0 ? +c[iVol] || 0 : 0];
+    if (r.slice(0, 5).some((x) => Number.isNaN(x))) continue;
+    rows.push(r);
+  }
+  return fromRows(rows);
+}
+
+function fromRows(rows) {
+  rows.sort((a, b) => a[0] - b[0]);
+  const d = { time: [], open: [], high: [], low: [], close: [], volume: [] };
+  let last = -Infinity;
+  for (const [t, o, h, l, c, v] of rows) {
+    if (t === last) continue;
+    last = t;
+    d.time.push(t); d.open.push(o); d.high.push(Math.max(h, o, c)); d.low.push(Math.min(l, o, c)); d.close.push(c); d.volume.push(v);
+  }
+  if (!d.time.length) throw new Error('no valid rows found');
+  return d;
+}
+
+// Deterministic random-walk data so the app works offline.
+function sampleData(n = 1500, stepMs = 4 * 3600000, seed = 42) {
+  let s = seed;
+  const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+  const gauss = () => Math.sqrt(-2 * Math.log(rnd() + 1e-12)) * Math.cos(2 * Math.PI * rnd());
+  const rows = [];
+  let p = 30000, drift = 0;
+  const start = Date.UTC(2024, 0, 1);
+  for (let i = 0; i < n; i++) {
+    if (i % 150 === 0) drift = (rnd() - 0.5) * 0.004;
+    const o = p;
+    const c = o * (1 + drift + gauss() * 0.012);
+    const h = Math.max(o, c) * (1 + Math.abs(gauss()) * 0.005);
+    const l = Math.min(o, c) * (1 - Math.abs(gauss()) * 0.005);
+    rows.push([start + i * stepMs, +o.toFixed(2), +h.toFixed(2), +l.toFixed(2), +c.toFixed(2), +(500 + rnd() * 1500).toFixed(3)]);
+    p = c;
+  }
+  return fromRows(rows);
+}
+
+// Public market-data endpoint (no API key). Works from the browser; pages
+// backwards to collect up to `bars` candles.
+async function fetchBinance(symbol, interval, bars = 3000) {
+  const rows = [];
+  let end;
+  while (rows.length < bars) {
+    const limit = Math.min(1000, bars - rows.length);
+    const url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(symbol.toUpperCase())}&interval=${interval}&limit=${limit}${end ? `&endTime=${end}` : ''}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`exchange returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const k = await res.json();
+    if (!k.length) break;
+    rows.unshift(...k.map((x) => [x[0], +x[1], +x[2], +x[3], +x[4], +x[5]]));
+    end = k[0][0] - 1;
+    if (k.length < limit) break;
+  }
+  return fromRows(rows);
+}
+
+return { parseCSV, fromRows, sampleData, fetchBinance };
+})();
+
+const __m_examples = (() => {
+// Example strategies shown in the editor's "Examples" menu.
+const EXAMPLES = [
+  {
+    name: 'Moving average crossover',
+    code: `//@version=6
+strategy("MA Crossover", overlay=true, initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     commission_type=strategy.commission.percent, commission_value=0.05)
+
+fastLen = input.int(20, "Fast length", minval=1)
+slowLen = input.int(50, "Slow length", minval=1)
+useEma  = input.bool(true, "Use EMA")
+
+fast = useEma ? ta.ema(close, fastLen) : ta.sma(close, fastLen)
+slow = useEma ? ta.ema(close, slowLen) : ta.sma(close, slowLen)
+
+if ta.crossover(fast, slow)
+    strategy.entry("Long", strategy.long)
+if ta.crossunder(fast, slow)
+    strategy.entry("Short", strategy.short)
+
+plot(fast, "Fast", color=color.orange, linewidth=2)
+plot(slow, "Slow", color=color.blue, linewidth=2)
+`,
+  },
+  {
+    name: 'RSI mean reversion with TP / SL',
+    code: `//@version=6
+strategy("RSI Reversion", overlay=false, initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=50)
+
+len      = input.int(14, "RSI length")
+oversold = input.float(30, "Oversold")
+tpPct    = input.float(3.0, "Take profit %", step=0.5) / 100
+slPct    = input.float(1.5, "Stop loss %", step=0.5) / 100
+
+r = ta.rsi(close, len)
+
+if ta.crossover(r, oversold) and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if strategy.position_size > 0
+    entry = strategy.position_avg_price
+    strategy.exit("TP/SL", "Long", limit=entry * (1 + tpPct), stop=entry * (1 - slPct))
+
+plot(r, "RSI", color=color.purple)
+hline(70, "Overbought", color=color.red)
+hline(oversold, "Oversold", color=color.green)
+`,
+  },
+  {
+    name: 'Supertrend with trailing stop',
+    code: `//@version=6
+strategy("Supertrend", overlay=true, initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+atrLen = input.int(10, "ATR length")
+factor = input.float(3.0, "Factor", step=0.1)
+trailTicks = input.int(0, "Trailing offset (ticks, 0 = off)")
+
+[st, dir] = ta.supertrend(factor, atrLen)
+
+if ta.change(dir) < 0
+    strategy.entry("Long", strategy.long)
+if ta.change(dir) > 0
+    strategy.close("Long")
+
+if trailTicks > 0
+    strategy.exit("Trail", "Long", trail_points=trailTicks, trail_offset=trailTicks)
+
+plot(dir < 0 ? st : na, "Up trend", color=color.green, style=plot.style_linebr, linewidth=2)
+plot(dir > 0 ? st : na, "Down trend", color=color.red, style=plot.style_linebr, linewidth=2)
+`,
+  },
+  {
+    name: 'Bollinger breakout (stop orders)',
+    code: `//@version=6
+strategy("BB Breakout", overlay=true, initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+length = input.int(20, "Length")
+mult   = input.float(2.0, "StdDev")
+src    = input.source(close, "Source")
+
+[basis, upper, lower] = ta.bb(src, length, mult)
+
+// enter on a break of the upper band, exit on a cross back under the basis
+if close < upper and strategy.position_size == 0
+    strategy.entry("BBLong", strategy.long, stop=upper)
+else
+    strategy.cancel("BBLong")
+if ta.crossunder(close, basis)
+    strategy.close("BBLong", comment="Basis")
+
+plot(basis, "Basis", color=color.orange)
+p1 = plot(upper, "Upper", color=color.blue)
+p2 = plot(lower, "Lower", color=color.blue)
+fill(p1, p2, color=color.new(color.blue, 90))
+`,
+  },
+  {
+    name: 'MACD + session filter + pyramiding',
+    code: `//@version=6
+strategy("MACD Pyramid", overlay=false, pyramiding=3, initial_capital=10000,
+     default_qty_type=strategy.cash, default_qty_value=2000)
+
+[macdLine, signal, hist] = ta.macd(close, 12, 26, 9)
+startDate = input.time(timestamp("2024-01-01"), "Start date")
+inWindow  = time >= startDate
+
+var int adds = 0
+if inWindow and ta.crossover(macdLine, signal)
+    adds += 1
+    strategy.entry("L" + str.tostring(adds), strategy.long)
+if ta.crossunder(macdLine, 0)
+    strategy.close_all(comment="MACD < 0")
+
+plot(hist, "Histogram", style=plot.style_columns, color=hist >= 0 ? color.new(color.teal, 30) : color.new(color.red, 30))
+plot(macdLine, "MACD", color=color.blue)
+plot(signal, "Signal", color=color.orange)
+hline(0)
+`,
+  },
+];
+
+return { EXAMPLES };
+})();
+
+const __m_app = (() => {
+// Browser UI: data loading, Pine editor, chart rendering and the strategy tester.
+const { runScript, SOURCES } = __m_runtime;
+const { parseCSV, sampleData, fetchBinance } = __m_data;
+const { EXAMPLES } = __m_examples;
+const LW = window.LightweightCharts;
+const $ = (id) => document.getElementById(id);
+
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(`pbt.${k}`); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(`pbt.${k}`, JSON.stringify(v)); } catch { /* storage unavailable */ } },
+};
+
+const state = {
+  data: null,
+  dataLabel: '',
+  symbol: 'SAMPLE',
+  result: null,
+  inputOverrides: store.get('inputs', {}),
+  propOverrides: store.get('props', {}),
+  chart: null,
+  eqChart: null,
+  candleSeries: null,
+  keepRange: null,
+};
+
+// ------------------------------------------------------------ formatting
+const fmtMoney = (v) => (Number.isFinite(v) ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : v === Infinity ? '∞' : '—');
+const fmtPct = (v) => (Number.isFinite(v) ? `${v.toFixed(2)}%` : '—');
+const fmtNum = (v, d = 2) => (Number.isFinite(v) ? v.toFixed(d) : v === Infinity ? '∞' : '—');
+const fmtQty = (v) => (Number.isFinite(v) ? (Math.abs(v - Math.round(v)) < 1e-9 ? String(Math.round(v)) : v.toFixed(Math.abs(v) < 1 ? 6 : 4).replace(/0+$/, '').replace(/\.$/, '')) : '—');
+const signCls = (v) => (v > 0 ? 'pos' : v < 0 ? 'neg' : '');
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function fmtTime(ms) {
+  const d = new Date(ms);
+  const p = (x) => String(x).padStart(2, '0');
+  const date = `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
+  return d.getUTCHours() || d.getUTCMinutes() ? `${date} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}` : date;
+}
+const priceDecimals = (mintick) => Math.max(0, Math.min(8, Math.round(-Math.log10(mintick || 0.01))));
+
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function cssColor(c, fallback) {
+  if (!c) return fallback;
+  const m = /^#([0-9a-f]{6})([0-9a-f]{2})$/i.exec(c);
+  if (m) {
+    const n = parseInt(m[1], 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${(parseInt(m[2], 16) / 255).toFixed(3)})`;
+  }
+  return c;
+}
+function withAlpha(c, a) {
+  const m = /^#([0-9a-f]{6})/i.exec(c);
+  if (!m) return c;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+
+// --------------------------------------------------------------- editor
+const KW = /\b(if|else|for|to|by|in|while|var|varip|and|or|not|true|false|break|continue|switch|na|int|float|bool|string|color|series|simple|const)\b/;
+function highlight(src) {
+  const out = [];
+  const re = /(\/\/.*$)|("(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?)|(#[0-9a-fA-F]{6,8}\b)|(\b\d+\.?\d*(?:[eE][+-]?\d+)?\b)|(\b(?:ta|math|strategy|input|color|str|array|plot|shape|location|size|request|timeframe|syminfo|barstate|display|hline|format)\.[A-Za-z_.]+)|([A-Za-z_]\w*)(?=\s*\()|(\b[A-Za-z_]\w*\b)/gm;
+  let last = 0, m;
+  while ((m = re.exec(src))) {
+    out.push(esc(src.slice(last, m.index)));
+    const t = m[0];
+    if (m[1]) out.push(`<span class="tk-cmt">${esc(t)}</span>`);
+    else if (m[2] || m[3]) out.push(`<span class="tk-str">${esc(t)}</span>`);
+    else if (m[4]) out.push(`<span class="tk-num">${t}</span>`);
+    else if (m[5]) out.push(`<span class="tk-ns">${esc(t)}</span>`);
+    else if (m[6]) out.push(`<span class="tk-fn">${esc(t)}</span>`);
+    else if (KW.test(t) && KW.exec(t)[0] === t) out.push(`<span class="tk-kw">${t}</span>`);
+    else out.push(esc(t));
+    last = m.index + t.length;
+  }
+  out.push(esc(src.slice(last)));
+  return `${out.join('')}\n`;
+}
+const code = $('code');
+function refreshEditor(errLine) {
+  $('highlight').innerHTML = highlight(code.value);
+  const lines = code.value.split('\n').length;
+  let g = '';
+  for (let i = 1; i <= lines; i++) g += `<div${i === errLine ? ' class="err"' : ''}>${i}</div>`;
+  $('gutter').innerHTML = g;
+  syncScroll();
+}
+function syncScroll() {
+  $('highlight').scrollTop = code.scrollTop;
+  $('highlight').scrollLeft = code.scrollLeft;
+  $('gutter').scrollTop = code.scrollTop;
+}
+code.addEventListener('input', () => { refreshEditor(); store.set('code', code.value); });
+code.addEventListener('scroll', syncScroll);
+code.addEventListener('keydown', (e) => {
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const { selectionStart: s, selectionEnd: en, value } = code;
+    if (e.shiftKey) {
+      const ls = value.lastIndexOf('\n', s - 1) + 1;
+      if (value.startsWith('    ', ls)) {
+        code.value = value.slice(0, ls) + value.slice(ls + 4);
+        code.selectionStart = code.selectionEnd = Math.max(ls, s - 4);
+      }
+    } else {
+      code.value = `${value.slice(0, s)}    ${value.slice(en)}`;
+      code.selectionStart = code.selectionEnd = s + 4;
+    }
+    code.dispatchEvent(new Event('input'));
+  } else if (e.key === 'Enter' && !(e.ctrlKey || e.metaKey)) {
+    // keep the indentation of the current line; indent after a block opener
+    e.preventDefault();
+    const { selectionStart: s, selectionEnd: en, value } = code;
+    const ls = value.lastIndexOf('\n', s - 1) + 1;
+    const line = value.slice(ls, s);
+    let indent = /^\s*/.exec(line)[0];
+    if (/^\s*(if|else|for|while|switch)\b.*$|=>\s*$/.test(line)) indent += '    ';
+    code.value = `${value.slice(0, s)}\n${indent}${value.slice(en)}`;
+    code.selectionStart = code.selectionEnd = s + 1 + indent.length;
+    code.dispatchEvent(new Event('input'));
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); }
+  if (e.key === 'Escape' && !$('settingsModal').hidden) closeSettings();
+});
+
+for (const [i, ex] of EXAMPLES.entries()) {
+  const o = document.createElement('option');
+  o.value = String(i);
+  o.textContent = ex.name;
+  $('examples').append(o);
+}
+$('examples').addEventListener('change', (e) => {
+  const ex = EXAMPLES[+e.target.value];
+  e.target.value = '';
+  if (!ex) return;
+  code.value = ex.code;
+  state.inputOverrides = {};
+  state.propOverrides = {};
+  store.set('inputs', {});
+  store.set('props', {});
+  store.set('code', code.value);
+  refreshEditor();
+  run();
+});
+
+// ----------------------------------------------------------------- data
+function setSourceUI() {
+  const src = $('dataSource').value;
+  const ex = src === 'binance';
+  $('symbol').hidden = !ex;
+  $('interval').hidden = !ex;
+  $('barCount').hidden = !ex;
+  $('loadData').hidden = !ex;
+  $('csvLabel').hidden = src !== 'csv';
+  if (src === 'sample') loadSample();
+}
+$('dataSource').addEventListener('change', setSourceUI);
+function setData(d, label, symbol) {
+  const keep = state.data && state.data.time.length === d.time.length && state.data.time[0] === d.time[0];
+  state.keepRange = keep && state.chart ? state.chart.timeScale().getVisibleLogicalRange() : null;
+  state.data = d;
+  state.dataLabel = label;
+  state.symbol = symbol;
+  $('dataInfo').textContent = `${label} · ${d.time.length.toLocaleString()} bars · ${fmtTime(d.time[0])} → ${fmtTime(d.time[d.time.length - 1])}`;
+}
+function loadSample() {
+  setData(sampleData(1500), 'Sample data (4h)', 'SAMPLE');
+  run();
+}
+$('loadData').addEventListener('click', async () => {
+  const sym = $('symbol').value.trim().toUpperCase();
+  const iv = $('interval').value;
+  const n = Math.max(100, Math.min(20000, +$('barCount').value || 3000));
+  setStatus(`Loading ${sym} ${iv}…`);
+  try {
+    const d = await fetchBinance(sym, iv, n);
+    setData(d, `${sym} · ${iv}`, sym);
+    run();
+  } catch (e) {
+    setStatus(`Could not load ${sym} from the exchange (${e.message}). If you're offline or the page blocks outside requests, export the chart data to CSV and open it with "CSV file".`, true);
+  }
+});
+$('csvFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    const d = parseCSV(await f.text());
+    const sym = f.name.replace(/\.[^.]+$/, '').split(/[_ ,]/)[0].toUpperCase();
+    setData(d, f.name, sym || 'CSV');
+    run();
+  } catch (err) {
+    setStatus(`Could not read ${f.name}: ${err.message}`, true);
+  }
+  e.target.value = '';
+});
+
+// ------------------------------------------------------------------ run
+function setStatus(msg, isError = false, ok = false) {
+  const el = $('status');
+  el.textContent = msg;
+  el.className = `status${isError ? ' error' : ''}${ok ? ' ok' : ''}`;
+}
+
+function run() {
+  if (!state.data) return;
+  let res;
+  try {
+    res = runScript(code.value, state.data, {
+      inputs: state.inputOverrides,
+      properties: state.propOverrides,
+      symbol: state.symbol,
+    });
+  } catch (e) {
+    const line = e.line || (/line (\d+)/.exec(e.message) || [])[1];
+    refreshEditor(line ? +line : undefined);
+    setStatus(e.message, true);
+    return;
+  }
+  refreshEditor();
+  state.result = res;
+  const s = res.strategy;
+  setStatus(`${res.title} · ran ${state.data.time.length.toLocaleString()} bars in ${res.elapsedMs} ms${s ? ` · ${s.trades.length} closed trade${s.trades.length === 1 ? '' : 's'}${s.openTrades.length ? `, ${s.openTrades.length} open` : ''}` : ''}`, false, true);
+  renderChart(res);
+  renderTester(res);
+}
+$('runBtn').addEventListener('click', run);
+
+// ---------------------------------------------------------------- chart
+function chartTheme() {
+  return {
+    bg: css('--panel'), fg: css('--muted'), line: css('--line'), up: css('--up'), down: css('--down'),
+    buy: css('--buy'), sell: css('--sell'), accent: css('--accent'), fgStrong: css('--fg'),
+  };
+}
+
+function baseChartOptions(th, intraday) {
+  return {
+    autoSize: true,
+    layout: {
+      background: { type: 'solid', color: th.bg }, textColor: th.fg, fontSize: 11,
+      fontFamily: getComputedStyle(document.body).getPropertyValue('--font-mono') || 'monospace',
+      panes: { separatorColor: th.line, separatorHoverColor: withAlpha(th.accent, 0.3), enableResize: true },
+      attributionLogo: true,
+    },
+    grid: { vertLines: { color: withAlpha(th.line, 0.5) }, horzLines: { color: withAlpha(th.line, 0.5) } },
+    rightPriceScale: { borderColor: th.line },
+    timeScale: { borderColor: th.line, timeVisible: intraday, secondsVisible: false, rightOffset: 6 },
+    crosshair: { mode: LW.CrosshairMode.Normal },
+  };
+}
+
+const SHAPE_MAP = {
+  triangleup: 'arrowUp', arrowup: 'arrowUp', labelup: 'arrowUp', triangledown: 'arrowDown', arrowdown: 'arrowDown',
+  labeldown: 'arrowDown', circle: 'circle', square: 'square', diamond: 'square', cross: 'square', xcross: 'square', flag: 'square',
+};
+
+function renderChart(res) {
+  const d = state.data;
+  const th = chartTheme();
+  const times = d.time.map((t) => Math.floor(t / 1000));
+  const intraday = d.time.length > 1 && d.time[1] - d.time[0] < 86400000;
+  const prevRange = state.keepRange || (state.chart ? state.chart.timeScale().getVisibleLogicalRange() : null);
+  state.keepRange = null;
+  if (state.chart) state.chart.remove();
+  const chart = LW.createChart($('chart'), baseChartOptions(th, intraday));
+  state.chart = chart;
+  const dec = priceDecimals(res.mintick);
+  const priceFormat = { type: 'price', precision: dec, minMove: res.mintick };
+
+  // background colors (bgcolor) sit behind everything
+  if (res.bgcolors && res.bgcolors.some(Boolean)) {
+    const bg = chart.addSeries(LW.HistogramSeries, { priceScaleId: 'bg', lastValueVisible: false, priceLineVisible: false, base: 0 }, 0);
+    bg.priceScale().applyOptions({ scaleMargins: { top: 0, bottom: 0 }, visible: false });
+    bg.setData(times.map((t, i) => (res.bgcolors[i] ? { time: t, value: 1, color: cssColor(res.bgcolors[i]) } : { time: t })));
+  }
+  const vol = chart.addSeries(LW.HistogramSeries, { priceScaleId: 'vol', priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false }, 0);
+  vol.priceScale().applyOptions({ scaleMargins: { top: 0.84, bottom: 0 }, visible: false });
+  vol.setData(times.map((t, i) => ({ time: t, value: d.volume[i], color: withAlpha(d.close[i] >= d.open[i] ? th.up : th.down, 0.28) })));
+
+  const candles = chart.addSeries(LW.CandlestickSeries, {
+    upColor: th.up, downColor: th.down, wickUpColor: th.up, wickDownColor: th.down, borderVisible: false, priceFormat,
+  }, 0);
+  candles.setData(times.map((t, i) => {
+    const bar = { time: t, open: d.open[i], high: d.high[i], low: d.low[i], close: d.close[i] };
+    const bc = res.barcolors && res.barcolors[i];
+    if (bc) { const c = cssColor(bc); bar.color = c; bar.wickColor = c; bar.borderColor = c; }
+    return bar;
+  }));
+  state.candleSeries = candles;
+
+  // plots
+  const paneSeries = { 0: [candles], 1: [] };
+  const plotSeries = [];
+  for (const p of res.plots) {
+    if (p.display === 'none') continue;
+    const pane = p.overlay ? 0 : 1;
+    const color = cssColor(p.colors.find(Boolean), th.accent);
+    const common = { color, lastValueVisible: true, priceLineVisible: false, title: '' };
+    if (pane === 0) common.priceFormat = priceFormat;
+    let s;
+    const style = p.style;
+    if (style === 'histogram' || style === 'columns') {
+      s = chart.addSeries(LW.HistogramSeries, { ...common, base: p.histbase || 0 }, pane);
+    } else if (style === 'area' || style === 'areabr') {
+      s = chart.addSeries(LW.AreaSeries, { ...common, lineColor: color, topColor: withAlpha(p.colors.find(Boolean) || th.accent, 0.3), bottomColor: withAlpha(p.colors.find(Boolean) || th.accent, 0.02), lineWidth: p.linewidth }, pane);
+    } else {
+      const opts = { ...common, lineWidth: Math.max(1, Math.min(4, p.linewidth)) };
+      if (style === 'stepline' || style === 'steplinebr' || style === 'stepline_diamond') opts.lineType = 1;
+      if (style === 'circles' || style === 'cross') { opts.lineVisible = false; opts.pointMarkersVisible = true; opts.pointMarkersRadius = Math.max(2, p.linewidth + 1); }
+      s = chart.addSeries(LW.LineSeries, opts, pane);
+    }
+    const breaks = style !== 'line' && style !== 'stepline' && style !== 'area';
+    const pts = [];
+    for (let i = 0; i < times.length; i++) {
+      const j = i + (p.offset || 0);
+      if (j < 0 || j >= times.length) continue;
+      const v = p.values[i];
+      const c = p.colors[i];
+      if (!Number.isFinite(v) || !c) { if (breaks) pts.push({ time: times[j] }); continue; }
+      const pt = { time: times[j], value: v };
+      if (c) pt.color = cssColor(c);
+      pts.push(pt);
+    }
+    pts.sort((a, b) => a.time - b.time);
+    s.setData(pts);
+    paneSeries[pane].push(s);
+    plotSeries.push({ p, s });
+  }
+
+  // hlines go on a series in their pane
+  for (const h of res.hlines) {
+    const pane = h.overlay ? 0 : 1;
+    let host = paneSeries[pane][0];
+    if (!host) {
+      host = chart.addSeries(LW.LineSeries, { lineVisible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false }, pane);
+      host.setData(times.map((t) => ({ time: t, value: h.price })));
+      paneSeries[pane].push(host);
+    }
+    host.createPriceLine({
+      price: h.price, color: cssColor(h.color, th.fg), lineWidth: h.linewidth || 1,
+      lineStyle: h.linestyle === 'solid' || h.linestyle === 'hline.style_solid' ? 0 : h.linestyle === 'dotted' || h.linestyle === 'hline.style_dotted' ? 1 : 2,
+      axisLabelVisible: true, title: h.title || '',
+    });
+  }
+
+  // markers: plotshape/plotchar + strategy fills
+  const markers = [];
+  const paneMarkers = [];
+  for (const sh of res.shapes) {
+    for (const pt of sh.points) {
+      const above = sh.location === 'abovebar' || sh.location === 'top' || (sh.style === 'arrow' && !pt.up);
+      const m = {
+        time: times[pt.bar], position: above ? 'aboveBar' : 'belowBar', color: cssColor(pt.color, th.accent),
+        shape: sh.style === 'arrow' ? (pt.up ? 'arrowUp' : 'arrowDown') : SHAPE_MAP[sh.style] || (above ? 'arrowDown' : 'arrowUp'),
+        text: pt.text || '', size: sh.size === 'tiny' ? 0.5 : sh.size === 'small' ? 0.8 : sh.size === 'large' ? 1.6 : sh.size === 'huge' ? 2 : 1,
+      };
+      if (sh.style === 'char') { m.shape = 'circle'; m.size = 0.4; }
+      (sh.overlay ? markers : paneMarkers).push(m);
+    }
+  }
+  if (res.strategy) {
+    for (const f of res.strategy.fills) {
+      const buy = f.dir > 0;
+      markers.push({
+        time: times[f.bar], position: buy ? 'belowBar' : 'aboveBar', color: buy ? th.buy : th.sell,
+        shape: buy ? 'arrowUp' : 'arrowDown', text: `${f.type === 'entry' ? f.id : f.comment || f.id} ${buy ? '+' : '−'}${fmtQty(f.qty)}`, size: 1,
+      });
+    }
+  }
+  markers.sort((a, b) => a.time - b.time);
+  LW.createSeriesMarkers(candles, markers);
+  if (paneMarkers.length && paneSeries[1][0]) {
+    paneMarkers.sort((a, b) => a.time - b.time);
+    LW.createSeriesMarkers(paneSeries[1][0], paneMarkers);
+  }
+
+  try {
+    const panes = chart.panes();
+    if (panes[1]) panes[1].setHeight(Math.round($('chart').clientHeight * 0.3));
+  } catch { /* older library */ }
+
+  if (prevRange) chart.timeScale().setVisibleLogicalRange(prevRange);
+  else chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, times.length - 220), to: times.length + 5 });
+
+  // legend
+  const legend = $('legend');
+  const showLegend = (i) => {
+    if (i === undefined || i < 0 || i >= times.length) i = times.length - 1;
+    const up = d.close[i] >= d.open[i];
+    const cls = up ? 'up' : 'dn';
+    const ov = plotSeries.filter((x) => x.p.overlay).slice(0, 6)
+      .map((x) => `<span style="color:${cssColor(x.p.colors[i] || x.p.colors.find(Boolean), th.fg)}">${esc(x.p.title)} ${fmtNum(x.p.values[i], dec)}</span>`).join('');
+    legend.innerHTML = `<div class="t">${esc(state.symbol)} · ${esc(res.timeframe)} · ${esc(res.title)}</div>
+      <div class="row"><span>O <span class="${cls}">${fmtNum(d.open[i], dec)}</span></span><span>H <span class="${cls}">${fmtNum(d.high[i], dec)}</span></span><span>L <span class="${cls}">${fmtNum(d.low[i], dec)}</span></span><span>C <span class="${cls}">${fmtNum(d.close[i], dec)}</span></span></div>
+      ${ov ? `<div class="row">${ov}</div>` : ''}`;
+  };
+  showLegend();
+  chart.subscribeCrosshairMove((param) => {
+    showLegend(param && param.logical !== undefined ? Math.round(param.logical) : undefined);
+  });
+}
+
+// ---------------------------------------------------------------- tester
+document.querySelectorAll('.tester .tabs button').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('.tester .tabs button').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
+  for (const t of ['overview', 'performance', 'trades', 'properties']) $(`tab-${t}`).hidden = t !== b.dataset.tab;
+  if (b.dataset.tab === 'overview' && state.result) renderEquity(state.result);
+}));
+$('showBH').addEventListener('change', () => state.result && renderEquity(state.result));
+
+function renderTester(res) {
+  const s = res.strategy;
+  $('testerTitle').textContent = s ? res.title : '';
+  if (!s) {
+    const msg = `<div class="empty">This script is an indicator. Declare it with <code>strategy()</code> and call <code>strategy.entry()</code> to see trades and performance here.</div>`;
+    $('stats').innerHTML = msg;
+    for (const t of ['performance', 'trades', 'properties']) $(`tab-${t}`).innerHTML = msg;
+    if (state.eqChart) { state.eqChart.remove(); state.eqChart = null; }
+    return;
+  }
+  const m = s.metrics;
+  const stat = (k, v, sub, cls = '') => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
+  $('stats').innerHTML = [
+    stat('Net profit', fmtMoney(m.all.netProfit), fmtPct(m.netProfitPct), signCls(m.all.netProfit)),
+    stat('Total closed trades', String(m.all.totalTrades), m.openTrades ? `${m.openTrades} open` : ''),
+    stat('Percent profitable', fmtPct(m.all.percentProfitable), `${m.all.winningTrades}/${m.all.totalTrades}`),
+    stat('Profit factor', fmtNum(m.all.profitFactor, 3)),
+    stat('Max drawdown', fmtMoney(m.maxDrawdown), fmtPct(m.maxDrawdownPct), m.maxDrawdown > 0 ? 'neg' : ''),
+    stat('Avg trade', fmtMoney(m.all.avgTrade), fmtPct(m.all.avgTradePct), signCls(m.all.avgTrade)),
+    stat('Avg # bars in trades', fmtNum(m.all.avgBars, 0)),
+  ].join('');
+  if (!$('tab-overview').hidden) renderEquity(res);
+  renderPerformance(m);
+  renderTrades(s);
+  renderProperties(s.config, res);
+}
+
+function renderEquity(res) {
+  const s = res.strategy;
+  if (!s) return;
+  const d = state.data;
+  const th = chartTheme();
+  if (state.eqChart) state.eqChart.remove();
+  const intraday = d.time.length > 1 && d.time[1] - d.time[0] < 86400000;
+  const opts = baseChartOptions(th, intraday);
+  opts.layout.attributionLogo = false;
+  opts.rightPriceScale.scaleMargins = { top: 0.15, bottom: 0.05 };
+  const ch = LW.createChart($('equityChart'), opts);
+  state.eqChart = ch;
+  const init = s.metrics.initialCapital;
+  const eq = ch.addSeries(LW.BaselineSeries, {
+    baseValue: { type: 'price', price: init },
+    topLineColor: th.up, topFillColor1: withAlpha(th.up, 0.28), topFillColor2: withAlpha(th.up, 0.04),
+    bottomLineColor: th.down, bottomFillColor1: withAlpha(th.down, 0.04), bottomFillColor2: withAlpha(th.down, 0.28),
+    lineWidth: 2, priceLineVisible: false, title: 'Equity',
+  });
+  const times = d.time.map((t) => Math.floor(t / 1000));
+  eq.setData(times.map((t, i) => (Number.isFinite(s.equity[i]) ? { time: t, value: s.equity[i] } : { time: t })));
+  if ($('showBH').checked) {
+    const bh = ch.addSeries(LW.LineSeries, { color: withAlpha(th.fg, 0.7), lineWidth: 1, lineStyle: 2, priceLineVisible: false, title: 'Buy & hold' });
+    const p0 = d.open[0];
+    bh.setData(times.map((t, i) => ({ time: t, value: init * (d.close[i] / p0) })));
+  }
+  ch.timeScale().fitContent();
+}
+
+function renderPerformance(m) {
+  const rows = [
+    ['Net profit', (g) => g.netProfit, 'money', (g) => (g.netProfit / m.initialCapital) * 100],
+    ['Gross profit', (g) => g.grossProfit, 'money', (g) => (g.grossProfit / m.initialCapital) * 100],
+    ['Gross loss', (g) => g.grossLoss, 'money', (g) => (g.grossLoss / m.initialCapital) * 100],
+    ['Commission paid', (g) => g.commission, 'money'],
+    ['Profit factor', (g) => g.profitFactor, 'num3'],
+    ['Total closed trades', (g) => g.totalTrades, 'int'],
+    ['Number winning trades', (g) => g.winningTrades, 'int'],
+    ['Number losing trades', (g) => g.losingTrades, 'int'],
+    ['Percent profitable', (g) => g.percentProfitable, 'pct'],
+    ['Avg trade', (g) => g.avgTrade, 'money', (g) => g.avgTradePct],
+    ['Avg winning trade', (g) => g.avgWin, 'money', (g) => g.avgWinPct],
+    ['Avg losing trade', (g) => g.avgLoss, 'money', (g) => g.avgLossPct],
+    ['Ratio avg win / avg loss', (g) => g.ratioAvgWinLoss, 'num3'],
+    ['Largest winning trade', (g) => g.largestWin, 'money', (g) => g.largestWinPct],
+    ['Largest losing trade', (g) => g.largestLoss, 'money', (g) => g.largestLossPct],
+    ['Avg # bars in trades', (g) => g.avgBars, 'int0'],
+    ['Avg # bars in winning trades', (g) => g.avgBarsWin, 'int0'],
+    ['Avg # bars in losing trades', (g) => g.avgBarsLoss, 'int0'],
+  ];
+  const f = (v, kind) => (kind === 'money' ? fmtMoney(v) : kind === 'pct' ? fmtPct(v) : kind === 'num3' ? fmtNum(v, 3) : kind === 'int0' ? fmtNum(v, 0) : String(v));
+  const cell = (g, [, get, kind, sub]) => `<td class="mono">${f(get(g), kind)}${sub ? `<span class="sub">${fmtPct(sub(g))}</span>` : ''}</td>`;
+  const top = [
+    ['Initial capital', fmtMoney(m.initialCapital)],
+    ['Open P&L', fmtMoney(m.openPL)],
+    ['Max equity run-up', `${fmtMoney(m.maxRunup)} <span class="sub">${fmtPct(m.maxRunupPct)}</span>`],
+    ['Max equity drawdown', `${fmtMoney(m.maxDrawdown)} <span class="sub">${fmtPct(m.maxDrawdownPct)}</span>`],
+    ['Buy & hold return', `${fmtMoney(m.buyHoldReturn)} <span class="sub">${fmtPct(m.buyHoldReturnPct)}</span>`],
+    ['Sharpe ratio', fmtNum(m.sharpe, 3)],
+    ['Sortino ratio', fmtNum(m.sortino, 3)],
+    ['Max contracts held', fmtQty(m.maxContracts)],
+  ];
+  $('tab-performance').innerHTML = `<table class="grid"><thead><tr><th>Metric</th><th>All</th><th>Long</th><th>Short</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td>${r[0]}</td>${cell(m.all, r)}${cell(m.long, r)}${cell(m.short, r)}</tr>`).join('')}
+    ${top.map(([k, v]) => `<tr><td>${k}</td><td class="mono">${v}</td><td></td><td></td></tr>`).join('')}
+  </tbody></table>`;
+}
+
+function renderTrades(s) {
+  const dec = priceDecimals(state.result.mintick);
+  const rows = [];
+  for (const t of [...s.openTrades].reverse()) {
+    rows.push(`<tr data-a="${t.entryBar}" data-b="${state.data.time.length - 1}">
+      <td class="mono">—</td><td><span class="pill ${t.dir > 0 ? 'long' : 'short'}">${t.dir > 0 ? 'Long' : 'Short'}</span> <span class="pill open">Open</span></td>
+      <td>${esc(t.entryId)}<span class="sub">${fmtTime(t.entryTime)}</span></td><td class="mono">${t.entryPrice.toFixed(dec)}</td>
+      <td>—</td><td class="mono">—</td>
+      <td class="mono">${fmtQty(t.qty)}</td>
+      <td class="mono ${signCls(t.profit)}">${fmtMoney(t.profit)}</td><td></td><td></td><td></td></tr>`);
+  }
+  for (const t of [...s.trades].reverse()) {
+    rows.push(`<tr data-a="${t.entryBar}" data-b="${t.exitBar}">
+      <td class="mono">${t.num}</td><td><span class="pill ${t.dir > 0 ? 'long' : 'short'}">${t.dir > 0 ? 'Long' : 'Short'}</span></td>
+      <td>${esc(t.entryId)}<span class="sub">${fmtTime(t.entryTime)}</span></td><td class="mono">${t.entryPrice.toFixed(dec)}</td>
+      <td>${esc(t.exitId)}<span class="sub">${fmtTime(t.exitTime)}</span></td><td class="mono">${t.exitPrice.toFixed(dec)}</td>
+      <td class="mono">${fmtQty(t.qty)}</td>
+      <td class="mono ${signCls(t.profit)}">${fmtMoney(t.profit)}<span class="sub">${fmtPct(t.profitPct)}</span></td>
+      <td class="mono">${fmtMoney(t.cumProfit)}</td>
+      <td class="mono">${fmtMoney(t.runup)}</td><td class="mono">${fmtMoney(t.drawdown)}</td></tr>`);
+  }
+  $('tab-trades').innerHTML = rows.length
+    ? `<table class="grid trades"><thead><tr><th>#</th><th>Side</th><th>Entry signal</th><th>Entry price</th><th>Exit signal</th><th>Exit price</th><th>Qty</th><th>Profit</th><th>Cum. profit</th><th>Run-up</th><th>Drawdown</th></tr></thead><tbody>${rows.join('')}</tbody></table>`
+    : '<div class="empty">No trades yet. The strategy never placed an order that filled on this data.</div>';
+  $('tab-trades').querySelectorAll('tbody tr').forEach((tr) => tr.addEventListener('click', () => {
+    const a = +tr.dataset.a, b = +tr.dataset.b;
+    const pad = Math.max(15, Math.round((b - a) * 0.6));
+    state.chart.timeScale().setVisibleLogicalRange({ from: a - pad, to: b + pad });
+  }));
+}
+
+function renderProperties(cfg, res) {
+  const qtyType = { fixed: 'Contracts', cash: 'Cash', percent_of_equity: '% of equity' }[cfg.default_qty_type] || cfg.default_qty_type;
+  const comm = { percent: '%', cash_per_contract: 'per contract', cash_per_order: 'per order' }[cfg.commission_type] || '';
+  const items = [
+    ['Symbol', `${state.symbol} (${state.dataLabel})`],
+    ['Timeframe', res.timeframe],
+    ['Bars', state.data.time.length.toLocaleString()],
+    ['Range', `${fmtTime(state.data.time[0])} → ${fmtTime(state.data.time[state.data.time.length - 1])}`],
+    ['Tick size (syminfo.mintick)', String(res.mintick)],
+    ['Initial capital', fmtMoney(cfg.initial_capital)],
+    ['Order size', `${fmtQty(cfg.default_qty_value)} ${qtyType}`],
+    ['Pyramiding', String(cfg.pyramiding || 0)],
+    ['Commission', `${cfg.commission_value || 0} ${comm}`],
+    ['Slippage', `${cfg.slippage || 0} ticks`],
+    ['Fill orders', cfg.process_orders_on_close ? 'On bar close' : 'On next bar open'],
+    ['Intrabar price path', 'Open → nearer of high/low → other extreme → close'],
+  ];
+  const inputs = res.inputs.map((i) => [i.title, String(state.inputOverrides[i.key] ?? i.defval)]);
+  $('tab-properties').innerHTML = `<dl class="props">${items.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}
+    ${inputs.length ? `<dt style="grid-column:1/-1;padding-top:8px;font-weight:600">Inputs</dt>${inputs.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}` : ''}</dl>`;
+}
+
+// -------------------------------------------------------------- settings
+function openSettings() {
+  const res = state.result;
+  const inputs = res ? res.inputs : [];
+  const box = $('stab-inputs');
+  if (!inputs.length) box.innerHTML = '<p class="hint">This script has no inputs. Add some with <code>input.int()</code>, <code>input.float()</code>, <code>input.bool()</code>, <code>input.source()</code>…</p>';
+  else {
+    let lastGroup;
+    box.innerHTML = inputs.map((inp, idx) => {
+      const id = `in_${idx}`;
+      const cur = state.inputOverrides[inp.key] ?? inp.defval;
+      let ctl;
+      if (inp.type === 'bool') ctl = `<input type="checkbox" id="${id}" ${cur ? 'checked' : ''}>`;
+      else if (inp.type === 'source') ctl = `<select class="field" id="${id}">${SOURCES.map((s) => `<option ${s === cur ? 'selected' : ''}>${s}</option>`).join('')}</select>`;
+      else if (inp.options) ctl = `<select class="field" id="${id}">${inp.options.map((o) => `<option ${String(o) === String(cur) ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+      else if (inp.type === 'int' || inp.type === 'float' || inp.type === 'price') {
+        ctl = `<input class="field" type="number" id="${id}" value="${esc(cur)}" ${inp.minval !== undefined ? `min="${inp.minval}"` : ''} ${inp.maxval !== undefined ? `max="${inp.maxval}"` : ''} step="${inp.step ?? (inp.type === 'int' ? 1 : 'any')}">`;
+      } else if (inp.type === 'time') {
+        const v = new Date(+cur).toISOString().slice(0, 16);
+        ctl = `<input class="field" type="datetime-local" id="${id}" value="${v}">`;
+      } else if (inp.type === 'color') {
+        ctl = `<input class="field" type="color" id="${id}" value="${esc(String(cur).slice(0, 7))}">`;
+      } else ctl = `<input class="field" type="text" id="${id}" value="${esc(cur)}">`;
+      const grp = inp.group && inp.group !== lastGroup ? `<div class="grp">${esc(inp.group)}</div>` : '';
+      lastGroup = inp.group;
+      return `${grp}<label class="row-field" for="${id}"><span>${esc(inp.title)}${inp.tooltip ? `<span class="hint"> — ${esc(inp.tooltip)}</span>` : ''}</span>${ctl}</label>`;
+    }).join('');
+  }
+  const cfg = res && res.strategy ? res.strategy.config : null;
+  const props = $('stab-props');
+  if (!cfg) props.innerHTML = '<p class="hint">Properties apply to strategies. Declare the script with <code>strategy()</code>.</p>';
+  else {
+    const p = (k) => state.propOverrides[k] ?? cfg[k];
+    props.innerHTML = `
+      <label class="row-field" for="pr_cap"><span>Initial capital</span><input class="field" type="number" id="pr_cap" value="${p('initial_capital')}" min="0" step="any"></label>
+      <label class="row-field" for="pr_qty"><span>Order size</span><input class="field" type="number" id="pr_qty" value="${p('default_qty_value')}" min="0" step="any"></label>
+      <label class="row-field" for="pr_qtyt"><span>Order size unit</span><select class="field" id="pr_qtyt">
+        ${[['fixed', 'Contracts'], ['cash', 'Cash'], ['percent_of_equity', '% of equity']].map(([v, l]) => `<option value="${v}" ${p('default_qty_type') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="row-field" for="pr_pyr"><span>Pyramiding (orders)</span><input class="field" type="number" id="pr_pyr" value="${p('pyramiding') || 0}" min="0" step="1"></label>
+      <label class="row-field" for="pr_comm"><span>Commission</span><input class="field" type="number" id="pr_comm" value="${p('commission_value') || 0}" min="0" step="any"></label>
+      <label class="row-field" for="pr_commt"><span>Commission unit</span><select class="field" id="pr_commt">
+        ${[['percent', '%'], ['cash_per_contract', 'Cash per contract'], ['cash_per_order', 'Cash per order']].map(([v, l]) => `<option value="${v}" ${p('commission_type') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="row-field" for="pr_slip"><span>Slippage (ticks)</span><input class="field" type="number" id="pr_slip" value="${p('slippage') || 0}" min="0" step="1"></label>
+      <label class="row-field" for="pr_poc"><span>Fill orders on bar close</span><input type="checkbox" id="pr_poc" ${p('process_orders_on_close') ? 'checked' : ''}></label>
+      <p class="hint">These override the values in the script's <code>strategy()</code> call, like the Properties tab of a strategy's settings.</p>`;
+  }
+  $('settingsTitle').textContent = res ? `${res.title} settings` : 'Settings';
+  $('settingsModal').hidden = false;
+}
+function closeSettings() { $('settingsModal').hidden = true; }
+function applySettings() {
+  const res = state.result;
+  if (res) {
+    res.inputs.forEach((inp, idx) => {
+      const el = $(`in_${idx}`);
+      if (!el) return;
+      let v;
+      if (inp.type === 'bool') v = el.checked;
+      else if (inp.type === 'int') v = Math.round(+el.value);
+      else if (inp.type === 'float' || inp.type === 'price') v = +el.value;
+      else if (inp.type === 'time') v = Date.parse(`${el.value}:00Z`);
+      else v = el.value;
+      if (v === inp.defval) delete state.inputOverrides[inp.key];
+      else state.inputOverrides[inp.key] = v;
+    });
+    if (res.strategy && $('pr_cap')) {
+      const next = {
+        initial_capital: +$('pr_cap').value, default_qty_value: +$('pr_qty').value, default_qty_type: $('pr_qtyt').value,
+        pyramiding: Math.round(+$('pr_pyr').value), commission_value: +$('pr_comm').value, commission_type: $('pr_commt').value,
+        slippage: Math.round(+$('pr_slip').value), process_orders_on_close: $('pr_poc').checked,
+      };
+      // keep only values that differ from what the script itself declares
+      const declared = res.strategy.declared;
+      state.propOverrides = {};
+      for (const [k, v] of Object.entries(next)) if (v !== declared[k] && !(Number.isNaN(v))) state.propOverrides[k] = v;
+    }
+  }
+  store.set('inputs', state.inputOverrides);
+  store.set('props', state.propOverrides);
+  closeSettings();
+  run();
+}
+$('settingsBtn').addEventListener('click', openSettings);
+$('settingsClose').addEventListener('click', closeSettings);
+$('settingsApply').addEventListener('click', applySettings);
+$('settingsReset').addEventListener('click', () => {
+  state.inputOverrides = {};
+  state.propOverrides = {};
+  store.set('inputs', {});
+  store.set('props', {});
+  closeSettings();
+  run();
+});
+$('settingsModal').addEventListener('click', (e) => { if (e.target === $('settingsModal')) closeSettings(); });
+document.querySelectorAll('.modal .tabs button').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('.modal .tabs button').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
+  $('stab-inputs').hidden = b.dataset.stab !== 'inputs';
+  $('stab-props').hidden = b.dataset.stab !== 'props';
+}));
+
+// re-render charts when the theme flips
+const rerender = () => { if (state.result) { renderChart(state.result); if (!$('tab-overview').hidden) renderEquity(state.result); } };
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', rerender);
+new MutationObserver(rerender).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+// ----------------------------------------------------------------- boot
+code.value = store.get('code', EXAMPLES[0].code);
+refreshEditor();
+setSourceUI();
+
+return {  };
+})();
+
+</script>
+</body>
+</html>

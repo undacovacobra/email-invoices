@@ -1,0 +1,19 @@
+//@version=6
+strategy("MACD Pyramid", overlay=false, pyramiding=3, initial_capital=10000,
+     default_qty_type=strategy.cash, default_qty_value=2000)
+
+[macdLine, signal, hist] = ta.macd(close, 12, 26, 9)
+startDate = input.time(timestamp("2024-01-01"), "Start date")
+inWindow  = time >= startDate
+
+var int adds = 0
+if inWindow and ta.crossover(macdLine, signal)
+    adds += 1
+    strategy.entry("L" + str.tostring(adds), strategy.long)
+if ta.crossunder(macdLine, 0)
+    strategy.close_all(comment="MACD < 0")
+
+plot(hist, "Histogram", style=plot.style_columns, color=hist >= 0 ? color.new(color.teal, 30) : color.new(color.red, 30))
+plot(macdLine, "MACD", color=color.blue)
+plot(signal, "Signal", color=color.orange)
+hline(0)

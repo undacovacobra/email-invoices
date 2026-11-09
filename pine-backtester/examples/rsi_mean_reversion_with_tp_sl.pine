@@ -1,0 +1,21 @@
+//@version=6
+strategy("RSI Reversion", overlay=false, initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=50)
+
+len      = input.int(14, "RSI length")
+oversold = input.float(30, "Oversold")
+tpPct    = input.float(3.0, "Take profit %", step=0.5) / 100
+slPct    = input.float(1.5, "Stop loss %", step=0.5) / 100
+
+r = ta.rsi(close, len)
+
+if ta.crossover(r, oversold) and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if strategy.position_size > 0
+    entry = strategy.position_avg_price
+    strategy.exit("TP/SL", "Long", limit=entry * (1 + tpPct), stop=entry * (1 - slPct))
+
+plot(r, "RSI", color=color.purple)
+hline(70, "Overbought", color=color.red)
+hline(oversold, "Oversold", color=color.green)

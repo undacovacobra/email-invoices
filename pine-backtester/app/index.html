@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pine Backtester</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!-- APP:BEGIN -->
+<div class="app">
+  <header class="topbar">
+    <div class="brand">Pine<b>/</b>Backtester</div>
+    <div class="ctl">
+      <label for="dataSource">Data</label>
+      <select id="dataSource" class="field">
+        <option value="sample">Sample (offline)</option>
+        <option value="binance">Crypto exchange</option>
+        <option value="csv">CSV file</option>
+      </select>
+      <input id="symbol" class="field" value="BTCUSDT" aria-label="Symbol" hidden>
+      <select id="interval" class="field" aria-label="Interval" hidden>
+        <option>1m</option><option>5m</option><option>15m</option><option>30m</option>
+        <option>1h</option><option selected>4h</option><option>1d</option><option>1w</option>
+      </select>
+      <input id="barCount" class="field" type="number" min="100" max="20000" step="100" value="3000" aria-label="Number of bars" hidden>
+      <button id="loadData" class="btn" hidden>Load</button>
+      <label class="btn file-btn" id="csvLabel" hidden>Open CSV…<input type="file" id="csvFile" accept=".csv,.txt,text/csv"></label>
+    </div>
+    <span id="dataInfo" class="data-info"></span>
+    <span class="spacer"></span>
+    <button id="settingsBtn" class="btn" title="Script inputs and strategy properties">Settings</button>
+    <button id="runBtn" class="btn primary" title="Run the script (Ctrl/⌘ + Enter)">Run</button>
+  </header>
+
+  <main class="workspace">
+    <section class="chart-area" aria-label="Chart">
+      <div id="chart"></div>
+      <div id="legend" class="legend"></div>
+    </section>
+
+    <aside class="editor-pane" aria-label="Pine editor">
+      <div class="pane-head">
+        <span class="pane-title">Pine Editor</span>
+        <span class="spacer"></span>
+        <select id="examples" class="field" aria-label="Load an example script">
+          <option value="">Examples…</option>
+        </select>
+      </div>
+      <div class="editor">
+        <div id="gutter" class="gutter" aria-hidden="true"></div>
+        <div class="code-wrap">
+          <pre id="highlight" aria-hidden="true"></pre>
+          <textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-label="Pine Script source"></textarea>
+        </div>
+      </div>
+      <div id="status" class="status" role="status"></div>
+    </aside>
+
+    <section class="tester" aria-label="Strategy tester">
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+        <button role="tab" data-tab="performance" aria-selected="false">Performance Summary</button>
+        <button role="tab" data-tab="trades" aria-selected="false">List of Trades</button>
+        <button role="tab" data-tab="properties" aria-selected="false">Properties</button>
+        <span id="testerTitle" class="tester-title"></span>
+      </nav>
+      <div id="tab-overview" class="tab-body">
+        <div id="stats" class="stats"></div>
+        <div class="equity-wrap">
+          <div class="equity-opts">
+            <label><input type="checkbox" id="showBH" checked> Buy &amp; hold</label>
+          </div>
+          <div id="equityChart"></div>
+        </div>
+      </div>
+      <div id="tab-performance" class="tab-body" hidden></div>
+      <div id="tab-trades" class="tab-body" hidden></div>
+      <div id="tab-properties" class="tab-body" hidden></div>
+    </section>
+  </main>
+
+  <div id="settingsModal" class="modal-back" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <header>
+        <h2 id="settingsTitle">Settings</h2>
+        <button class="btn ghost" id="settingsClose" aria-label="Close">✕</button>
+      </header>
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-stab="inputs" aria-selected="true">Inputs</button>
+        <button role="tab" data-stab="props" aria-selected="false">Properties</button>
+      </nav>
+      <div id="stab-inputs" class="modal-body"></div>
+      <div id="stab-props" class="modal-body" hidden></div>
+      <footer>
+        <button class="btn" id="settingsReset">Reset to script defaults</button>
+        <button class="btn primary" id="settingsApply">Apply</button>
+      </footer>
+    </div>
+  </div>
+</div>
+<!-- APP:END -->
+<script src="vendor/lightweight-charts.standalone.production.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

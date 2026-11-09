@@ -1,0 +1,14 @@
+{
+  "name": "pine-backtester",
+  "version": "0.1.0",
+  "description": "Chart + strategy tester that runs Pine Script strategies on your own OHLCV data",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node serve.mjs",
+    "test": "node --test test/*.test.mjs",
+    "backtest": "node cli.mjs",
+    "build": "node build.mjs"
+  },
+  "license": "MIT"
+}

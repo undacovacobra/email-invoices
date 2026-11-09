@@ -1,0 +1,20 @@
+//@version=6
+strategy("Supertrend", overlay=true, initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+atrLen = input.int(10, "ATR length")
+factor = input.float(3.0, "Factor", step=0.1)
+trailTicks = input.int(0, "Trailing offset (ticks, 0 = off)")
+
+[st, dir] = ta.supertrend(factor, atrLen)
+
+if ta.change(dir) < 0
+    strategy.entry("Long", strategy.long)
+if ta.change(dir) > 0
+    strategy.close("Long")
+
+if trailTicks > 0
+    strategy.exit("Trail", "Long", trail_points=trailTicks, trail_offset=trailTicks)
+
+plot(dir < 0 ? st : na, "Up trend", color=color.green, style=plot.style_linebr, linewidth=2)
+plot(dir > 0 ? st : na, "Down trend", color=color.red, style=plot.style_linebr, linewidth=2)
