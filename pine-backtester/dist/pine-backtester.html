@@ -4488,11 +4488,15 @@ async function loadArchive(ySym, interval, from = -Infinity, to = Infinity) {
     return b > from && a <= to;
   });
   const parts = await Promise.all(wanted.map((f) => readGzJson(`../data/${fileKey(ySym)}/${interval}/${f}`).catch(() => null)));
-  let out = null;
-  for (const p of parts) {
-    if (!p) continue;
-    const d = { time: p.t.map((t) => t * 1000), open: p.o, high: p.h, low: p.l, close: p.c, volume: p.v };
-    out = out ? mergeBars(out, d) : d;
+  // chunk files are already in time order and don't overlap: join them end to end
+  const ok = parts.filter((x) => x && x.t.length).sort((x, y) => x.t[0] - y.t[0]);
+  if (!ok.length) return null;
+  const out = { time: [], open: [], high: [], low: [], close: [], volume: [] };
+  for (const x of ok) {
+    for (let i = 0; i < x.t.length; i++) {
+      out.time.push(x.t[i] * 1000); out.open.push(x.o[i]); out.high.push(x.h[i]);
+      out.low.push(x.l[i]); out.close.push(x.c[i]); out.volume.push(x.v[i]);
+    }
   }
   return out;
 }
