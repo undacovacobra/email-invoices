@@ -1,6 +1,7 @@
 // Browser UI: data loading, Pine editor, chart rendering and the strategy tester.
 import { runScript, SOURCES, timeParts, zonedToUtc } from '../src/runtime.js';
-import { parseCSV, sampleData, fetchBinance, guessContract, TIMEFRAMES, barSeconds, resample, SESSIONS } from '../src/data.js';
+import { parseCSV, sampleData, fetchBinanceAll, mergeBars, guessContract, TIMEFRAMES, barSeconds, resample, SESSIONS } from '../src/data.js';
+import { yahooSymbol } from '../src/market.js';
 import { EXAMPLES } from '../src/examples.js';
 
 const LW = window.LightweightCharts;
@@ -29,7 +30,8 @@ const state = {
   baseLabel: '',
   tfSel: store.get('tf', 'native'),
   session: SESSIONS.crypto, // where higher-timeframe bars start (see SESSIONS)
-  server: false, // local server with the market-data endpoint is running
+  server: false, // the site's market-data endpoint is reachable
+  mode: 'market', // 'market' (symbol + timeframe), 'csv' (imported file) or 'sample'
   range: store.get('range', { from: '', to: '' }), // backtest dates, YYYY-MM-DD in the chosen time zone
   rangeChanged: false,
 };
@@ -163,22 +165,6 @@ $('examples').addEventListener('change', (e) => {
 });
 
 // ----------------------------------------------------------------- data
-function setSourceUI(load = true) {
-  const src = $('dataSource').value;
-  const ex = src === 'binance';
-  const market = src === 'market';
-  store.set('source', src);
-  $('symbol').hidden = !(ex || market);
-  $('barCount').hidden = !ex;
-  $('loadData').hidden = !(ex || market);
-  $('csvLabel').hidden = src !== 'csv';
-  if (market && /USDT$/.test($('symbol').value)) $('symbol').value = store.get('marketSymbol', 'MNQ1!');
-  if (ex && !/USDT$/.test($('symbol').value)) $('symbol').value = 'BTCUSDT';
-  if (!load) return;
-  if (src === 'sample') loadSample();
-  if (market) loadMarket();
-}
-$('dataSource').addEventListener('change', setSourceUI);
 function setData(d, label, symbol, specName, kind) {
   const c = guessContract(specName || symbol);
   state.spec = c ? { pointvalue: c.pointvalue, mintick: c.mintick, root: c.root } : { pointvalue: 1, mintick: null, root: '' };
@@ -196,15 +182,16 @@ const tfLabel = (secs) => (TIMEFRAMES.find((t) => t[2] === secs) || [])[1] || (s
 function fillTimeframeOptions() {
   const sel = $('timeframe');
   const baseSecs = state.base ? barSeconds(state.base) : 0;
-  sel.innerHTML = `<option value="native">${state.base ? `As loaded (${tfLabel(baseSecs)})` : 'As loaded'}</option>` +
+  const nativeOpt = state.mode === 'market' ? '' : `<option value="native">${state.base ? `As loaded (${tfLabel(baseSecs)})` : 'As loaded'}</option>`;
+  sel.innerHTML = nativeOpt +
     TIMEFRAMES.map(([v, label, secs]) => {
-      const market = $('dataSource').value === 'market'; // market data is re-downloaded per timeframe
+      const market = state.mode === 'market'; // market data is downloaded per timeframe
       const tooFine = !market && state.base && secs < baseSecs;
       const uneven = !market && state.base && secs % baseSecs !== 0 && secs !== 86400;
       return `<option value="${v}"${tooFine || uneven ? ' disabled' : ''}>${label}${tooFine ? ' (needs finer data)' : ''}</option>`;
     }).join('');
   sel.value = state.tfSel;
-  if (sel.value !== state.tfSel || sel.selectedOptions[0]?.disabled) sel.value = 'native';
+  if (sel.value !== state.tfSel || sel.selectedOptions[0]?.disabled) sel.value = state.mode === 'market' ? '1' : 'native';
 }
 function applyTimeframe() {
   if (!state.base) return;
@@ -222,12 +209,8 @@ function applyTimeframe() {
 $('timeframe').addEventListener('change', () => {
   state.tfSel = $('timeframe').value;
   store.set('tf', state.tfSel);
-  if ($('dataSource').value === 'binance' && state.tfSel !== 'native') {
-    $('loadData').click(); // fetch that interval directly from the exchange
-    return;
-  }
-  if ($('dataSource').value === 'market') {
-    loadMarket();
+  if (state.mode === 'market') {
+    loadSymbol();
     return;
   }
   applyTimeframe();
@@ -284,64 +267,166 @@ $('tz').addEventListener('change', () => {
   run();
 });
 function loadSample() {
-  setData(sampleData(6000, 3600000), 'Sample data', 'SAMPLE', '', 'crypto');
+  state.mode = 'sample';
+  setData(sampleData(6000, 3600000), 'Sample data (offline)', 'SAMPLE', '', 'crypto');
   run();
 }
-// ---- market data from the local server (Yahoo Finance history, as far back as it serves)
-// Yahoo interval to download for each chart timeframe; others are built from these.
+// ---- market data: one symbol box, every timeframe, as much history as exists.
+// For each timeframe the app merges, newest wins:
+//   1. the saved archive that ships with the site (data/, grown weekly by a GitHub Action)
+//   2. bars this browser saved on earlier visits
+//   3. a live download (Yahoo Finance via the site's function; crypto from Binance)
+// Timeframes without their own feed are built from the nearest finer one.
 const MARKET_BASE = { 1: '1m', 3: '1m', 5: '5m', 15: '15m', 30: '30m', 45: '15m', 60: '60m', 120: '60m', 180: '60m', 240: '60m', D: '1d' };
+const CRYPTO_BASE = { 1: '1m', 3: '3m', 5: '5m', 15: '15m', 30: '30m', 45: '15m', 60: '1h', 120: '2h', 180: '1h', 240: '4h', D: '1d' };
+const CRYPTO_MAX_BARS = 100000;
+const cryptoPair = (sym) => {
+  const m = /^([A-Z0-9]{2,10}?)-?(USDT|USDC|USD)$/.exec(sym);
+  return m && !/!$/.test(sym) ? `${m[1]}USDT` : null;
+};
+const fileKey = (ySym) => ySym.replace(/[^A-Za-z0-9]/g, '_');
+
+// browser-side archive (IndexedDB); every call fails soft
+const idb = {
+  db: null,
+  async open() {
+    if (this.db) return this.db;
+    this.db = await new Promise((resolve, reject) => {
+      const req = indexedDB.open('pine-backtester', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('bars');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return this.db;
+  },
+  async get(key) {
+    try {
+      const db = await this.open();
+      return await new Promise((resolve) => {
+        const r = db.transaction('bars').objectStore('bars').get(key);
+        r.onsuccess = () => resolve(r.result || null);
+        r.onerror = () => resolve(null);
+      });
+    } catch { return null; }
+  },
+  async put(key, value) {
+    try {
+      const db = await this.open();
+      await new Promise((resolve) => {
+        const tx = db.transaction('bars', 'readwrite');
+        tx.objectStore('bars').put(value, key);
+        tx.oncomplete = resolve;
+        tx.onerror = resolve;
+      });
+    } catch { /* storage unavailable */ }
+  },
+};
+
+let archiveIndex;
+async function getArchiveIndex() {
+  if (archiveIndex !== undefined) return archiveIndex;
+  try {
+    const r = await fetch('../data/index.json', { cache: 'no-cache' });
+    archiveIndex = r.ok ? await r.json() : null;
+  } catch { archiveIndex = null; }
+  return archiveIndex;
+}
+async function readGzJson(url) {
+  const r = await fetch(url);
+  if (!r.ok) return null;
+  const buf = new Uint8Array(await r.arrayBuffer());
+  // some servers decompress .gz files on the way, others send the raw bytes
+  if (buf[0] === 0x1f && buf[1] === 0x8b) {
+    const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return JSON.parse(await new Response(stream).text());
+  }
+  return JSON.parse(new TextDecoder().decode(buf));
+}
+async function loadArchive(ySym, interval) {
+  const idx = await getArchiveIndex();
+  const entry = idx && idx.symbols && idx.symbols[fileKey(ySym)] && idx.symbols[fileKey(ySym)][interval];
+  if (!entry) return null;
+  const parts = await Promise.all(entry.files.map((f) => readGzJson(`../data/${fileKey(ySym)}/${interval}/${f}`).catch(() => null)));
+  let out = null;
+  for (const p of parts) {
+    if (!p) continue;
+    const d = { time: p.t.map((t) => t * 1000), open: p.o, high: p.h, low: p.l, close: p.c, volume: p.v };
+    out = out ? mergeBars(out, d) : d;
+  }
+  return out;
+}
+const memCache = new Map(); // already-loaded symbol/timeframe combinations, for instant switching
+
 let marketReq = 0;
-async function loadMarket() {
-  const sym = ($('symbol').value.trim() || 'MNQ1!').toUpperCase();
+async function loadSymbol() {
+  const sym = ($('symbol').value.trim() || 'MNQ1!').toUpperCase().replace(/\s+/g, '');
   $('symbol').value = sym;
   store.set('marketSymbol', sym);
-  if (!state.server) {
-    setStatus('Market data needs the app\'s server: open your cloud copy (see DEPLOY.md), or run  node serve.mjs  in the pine-backtester folder and open http://localhost:8080', true);
+  state.mode = 'market';
+  if (state.tfSel === 'native') { state.tfSel = '1'; store.set('tf', '1'); }
+  const id = ++marketReq;
+  const pair = cryptoPair(sym);
+  const iv = (pair ? CRYPTO_BASE : MARKET_BASE)[state.tfSel] || (pair ? '1m' : '1m');
+  const cacheKey = `${pair ? `binance:${pair}` : yahooSymbol(sym)}|${iv}`;
+  const hit = memCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < 5 * 60000) {
+    setData(hit.d, hit.label, sym, sym, hit.kind);
+    run();
     return;
   }
-  if (state.tfSel === 'native') { state.tfSel = '1'; store.set('tf', '1'); }
-  const iv = MARKET_BASE[state.tfSel] || '1m';
-  const id = ++marketReq;
-  setStatus(`Downloading ${sym} ${iv} history…`);
+  setStatus(`Loading ${sym} ${iv} history…`);
+  let live = null;
+  let liveErr = null;
+  let kind;
+  let name = '';
+  let ySym = pair ? null : yahooSymbol(sym);
   try {
-    const r = await fetch(`/api/history?symbol=${encodeURIComponent(sym)}&interval=${iv}`);
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.statusText);
-    if (id !== marketReq) return; // a newer request replaced this one
-    const kind = /=F$/.test(j.yahooSymbol) ? 'futures' : /-USD$/.test(j.yahooSymbol) ? 'crypto' : 'stocks';
-    const d = { time: j.time, open: j.open, high: j.high, low: j.low, close: j.close, volume: j.volume };
-    setData(d, `${sym}${j.name && j.name !== j.yahooSymbol ? ` (${j.name})` : ''} · ${iv} data`, sym, sym, kind);
-    run();
+    if (pair) {
+      kind = 'crypto';
+      live = await fetchBinanceAll(pair, iv, CRYPTO_MAX_BARS, (n) => { if (id === marketReq) setStatus(`Loading ${sym} ${iv} history… ${n.toLocaleString()} bars`); });
+      name = pair;
+    } else if (state.server) {
+      const r = await fetch(`/api/history?symbol=${encodeURIComponent(sym)}&interval=${iv}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      ySym = j.yahooSymbol;
+      name = j.name && j.name !== j.yahooSymbol ? j.name : '';
+      live = { time: j.time, open: j.open, high: j.high, low: j.low, close: j.close, volume: j.volume };
+    }
   } catch (e) {
-    if (id === marketReq) setStatus(`Could not download ${sym}: ${e.message}. Check the symbol (examples: MNQ1!, ES1!, NQ1!, AAPL, SPY, BTCUSD).`, true);
+    liveErr = e;
   }
+  if (id !== marketReq) return; // a newer request replaced this one
+  kind = kind || (/=F$/.test(ySym) ? 'futures' : /-USD$/.test(ySym) ? 'crypto' : 'stocks');
+  const idbKey = pair ? `binance:${pair}|${iv}` : `${ySym}|${iv}`;
+  const [archived, saved] = await Promise.all([pair ? null : loadArchive(ySym, iv), idb.get(idbKey)]);
+  if (id !== marketReq) return;
+  let d = null;
+  for (const part of [archived, saved, live]) if (part && part.time.length) d = d ? mergeBars(d, part) : part;
+  if (!d) {
+    const why = liveErr ? liveErr.message : 'no data source is reachable from this page';
+    setStatus(`Could not load ${sym}: ${why}. Check the symbol (examples: MNQ1!, ES1!, AAPL, SPY, BTCUSD).`, true);
+    return;
+  }
+  // remember what this browser has seen, so history keeps growing between visits
+  if (live) idb.put(idbKey, saved ? mergeBars(saved, live) : live);
+  const sources = [archived && 'saved archive', saved && 'this browser', live && (pair ? 'Binance' : 'Yahoo')].filter(Boolean);
+  const label = `${sym}${name ? ` (${name})` : ''} · ${iv} · ${sources.join(' + ')}${liveErr ? ' (live download failed)' : ''}`;
+  memCache.set(cacheKey, { d, label, kind, at: Date.now() });
+  setData(d, label, sym, sym, kind);
+  run();
 }
-$('symbol').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loadData').click(); });
-
-$('loadData').addEventListener('click', async () => {
-  if ($('dataSource').value === 'market') { loadMarket(); return; }
-  const sym = $('symbol').value.trim().toUpperCase();
-  // the exchange serves these intervals directly; 45m and 3h are built from 15m / 1h bars
-  const sel = state.tfSel === 'native' ? '60' : state.tfSel;
-  const direct = { 1: '1m', 3: '3m', 5: '5m', 15: '15m', 30: '30m', 60: '1h', 120: '2h', 240: '4h', D: '1d' };
-  const iv = direct[sel] || (sel === '45' ? '15m' : '1h');
-  const n = Math.max(100, Math.min(20000, +$('barCount').value || 3000));
-  setStatus(`Loading ${sym} ${iv}…`);
-  try {
-    const d = await fetchBinance(sym, iv, n);
-    setData(d, `${sym} · ${iv}`, sym, sym, 'crypto');
-    run();
-  } catch (e) {
-    setStatus(`Could not load ${sym} from the exchange (${e.message}). If you're offline or the page blocks outside requests, export the chart data to CSV and open it with "CSV file".`, true);
-  }
-});
+$('symbol').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadSymbol(); });
+$('symbol').addEventListener('change', () => loadSymbol()); // picking from the suggestions
+$('loadData').addEventListener('click', () => loadSymbol());
 $('csvFile').addEventListener('change', async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   try {
     const d = parseCSV(await f.text());
     const sym = f.name.replace(/\.[^.]+$/, '').split(',')[0].trim().toUpperCase();
-    setData(d, f.name, sym || 'CSV', f.name);
+    state.mode = 'csv';
+    setData(d, `${f.name} (your file — press Load to go back to market data)`, sym || 'CSV', f.name);
     run();
   } catch (err) {
     setStatus(`Could not read ${f.name}: ${err.message}`, true);
@@ -1066,19 +1151,15 @@ new MutationObserver(rerender).observe(document.documentElement, { attributes: t
 // ----------------------------------------------------------------- boot
 code.value = store.get('code', EXAMPLES[0].code);
 refreshEditor();
-// Boot: use downloaded market data when the local server is running, else the offline sample.
+// Boot: load the last symbol (MNQ1! the first time). Without the site's server or
+// archive (e.g. a page opened from disk) fall back to the offline sample.
 (async () => {
   try {
     const r = await fetch('/api/ping', { cache: 'no-store' });
     state.server = r.ok && (await r.json()).ok === true;
   } catch { state.server = false; }
-  const marketOpt = document.querySelector('#dataSource option[value="market"]');
-  if (marketOpt && !state.server) marketOpt.textContent = 'Market data (needs the cloud or local server)';
-  const saved = store.get('source', state.server ? 'market' : 'sample');
-  const want = saved === 'market' && !state.server ? 'sample' : saved;
-  $('dataSource').value = [...$('dataSource').options].some((o) => o.value === want) ? want : 'sample';
-  if ($('dataSource').value === 'csv' || $('dataSource').value === 'binance') {
-    setSourceUI(false);
-    loadSample(); // nothing to show until a file is opened / Load is pressed
-  } else setSourceUI();
+  $('symbol').value = store.get('marketSymbol', 'MNQ1!');
+  const canLoad = state.server || (await getArchiveIndex()) || cryptoPair($('symbol').value.toUpperCase());
+  if (canLoad) loadSymbol();
+  else loadSample();
 })();

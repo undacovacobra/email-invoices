@@ -41,8 +41,11 @@ No install needed. Any one of these:
 
 ## Getting your data in
 
-* **Market data** (when running `node serve.mjs`) – type a symbol and the history
-  downloads by itself, as far back as the free Yahoo Finance feed goes and up to the
+* **Market data** (on the cloud site or with `node serve.mjs`) – type a symbol and pick a
+  timeframe; the app merges the saved archive in `data/` (grown weekly by
+  `scripts/update-archive.mjs` via a GitHub Action), the copy your browser kept from
+  earlier visits and a live download. Crypto comes from Binance (much deeper history).
+  The live download goes as far back as the free Yahoo Finance feed goes and up to the
   latest minute: futures as `MNQ1!`, `ES1!`, `NQ1!`, `GC1!`…, stocks as `AAPL`, `SPY`,
   crypto as `BTCUSD`. How far back depends on the timeframe: 1m ≈ 30 days, 5m/15m/30m
   ≈ 60 days, 1h ≈ 2 years, 1D decades. Yahoo's continuous futures contract can roll on

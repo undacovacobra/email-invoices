@@ -12,7 +12,7 @@ const hosted = process.argv.includes('--hosted');
 const read = (p) => readFileSync(join(root, p), 'utf8');
 
 const ENGINE = ['src/lexer.js', 'src/parser.js', 'src/ta.js', 'src/broker.js', 'src/metrics.js', 'src/runtime.js'];
-const MODULES = [...ENGINE, 'src/data.js', 'src/examples.js', 'app/app.js'];
+const MODULES = [...ENGINE, 'src/data.js', 'src/market.js', 'src/examples.js', 'app/app.js'];
 const modVar = (p) => `__m_${basename(p, '.js')}`;
 
 function wrap(path) {

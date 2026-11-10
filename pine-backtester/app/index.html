@@ -15,17 +15,33 @@
   <header class="topbar">
     <div class="brand">Pine<b>/</b>Backtester</div>
     <div class="ctl">
-      <label for="dataSource">Data</label>
-      <select id="dataSource" class="field">
-        <option value="market">Market data</option>
-        <option value="sample">Sample (offline)</option>
-        <option value="binance">Crypto exchange</option>
-        <option value="csv">CSV file</option>
-      </select>
-      <input id="symbol" class="field" value="MNQ1!" aria-label="Symbol" placeholder="MNQ1!, ES1!, AAPL, BTCUSD" title="Futures like MNQ1! or ES1!, stocks like AAPL, crypto like BTCUSD" hidden>
-      <input id="barCount" class="field" type="number" min="100" max="20000" step="100" value="3000" aria-label="Number of bars" hidden>
-      <button id="loadData" class="btn" hidden>Load</button>
-      <label class="btn file-btn" id="csvLabel" hidden>Open CSV…<input type="file" id="csvFile" accept=".csv,.txt,text/csv"></label>
+      <label for="symbol">Symbol</label>
+      <input id="symbol" class="field" list="symbolList" value="MNQ1!" aria-label="Symbol" autocomplete="off" spellcheck="false"
+        title="Futures like MNQ1! or ES1!, stocks like AAPL or SPY, crypto like BTCUSD. Press Enter to load.">
+      <datalist id="symbolList">
+        <option value="MNQ1!">Micro E-mini Nasdaq-100</option>
+        <option value="NQ1!">E-mini Nasdaq-100</option>
+        <option value="MES1!">Micro E-mini S&amp;P 500</option>
+        <option value="ES1!">E-mini S&amp;P 500</option>
+        <option value="MYM1!">Micro E-mini Dow</option>
+        <option value="YM1!">E-mini Dow</option>
+        <option value="M2K1!">Micro E-mini Russell 2000</option>
+        <option value="RTY1!">E-mini Russell 2000</option>
+        <option value="MGC1!">Micro Gold</option>
+        <option value="GC1!">Gold</option>
+        <option value="MCL1!">Micro Crude Oil</option>
+        <option value="CL1!">Crude Oil</option>
+        <option value="SPY">SPDR S&amp;P 500 ETF</option>
+        <option value="QQQ">Invesco QQQ</option>
+        <option value="AAPL">Apple</option>
+        <option value="TSLA">Tesla</option>
+        <option value="NVDA">NVIDIA</option>
+        <option value="BTCUSD">Bitcoin</option>
+        <option value="ETHUSD">Ethereum</option>
+        <option value="SOLUSD">Solana</option>
+      </datalist>
+      <button id="loadData" class="btn">Load</button>
+      <label class="btn ghost file-btn" id="csvLabel" title="Use your own data file instead (for example TradingView's Export chart data)">Import CSV…<input type="file" id="csvFile" accept=".csv,.txt,text/csv"></label>
     </div>
     <div class="ctl">
       <label for="timeframe">Timeframe</label>

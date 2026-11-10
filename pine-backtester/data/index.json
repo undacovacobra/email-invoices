@@ -1,0 +1,193 @@
+{
+ "updated": "2026-11-10T16:24:33.365Z",
+ "symbols": {
+  "MNQ_F": {
+   "1m": {
+    "files": [
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 28583
+   },
+   "5m": {
+    "files": [
+     "2026-09.json.gz",
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 11468
+   },
+   "15m": {
+    "files": [
+     "2026-09.json.gz",
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 3844
+   },
+   "30m": {
+    "files": [
+     "2026-09.json.gz",
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 1924
+   },
+   "60m": {
+    "files": [
+     "2024.json.gz",
+     "2025.json.gz",
+     "2026.json.gz"
+    ],
+    "bars": 11434
+   },
+   "1d": {
+    "files": [
+     "all.json.gz"
+    ],
+    "bars": 6601
+   }
+  },
+  "NQ_F": {
+   "1m": {
+    "files": [
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 28583
+   },
+   "5m": {
+    "files": [
+     "2026-09.json.gz",
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 11467
+   },
+   "15m": {
+    "files": [
+     "2026-09.json.gz",
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 3845
+   },
+   "30m": {
+    "files": [
+     "2026-09.json.gz",
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 1925
+   },
+   "60m": {
+    "files": [
+     "2024.json.gz",
+     "2025.json.gz",
+     "2026.json.gz"
+    ],
+    "bars": 11412
+   },
+   "1d": {
+    "files": [
+     "all.json.gz"
+    ],
+    "bars": 6601
+   }
+  },
+  "MES_F": {
+   "1m": {
+    "files": [
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 28580
+   },
+   "5m": {
+    "files": [
+     "2026-09.json.gz",
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 11467
+   },
+   "15m": {
+    "files": [
+     "2026-09.json.gz",
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 3842
+   },
+   "30m": {
+    "files": [
+     "2026-09.json.gz",
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 1922
+   },
+   "60m": {
+    "files": [
+     "2024.json.gz",
+     "2025.json.gz",
+     "2026.json.gz"
+    ],
+    "bars": 11430
+   },
+   "1d": {
+    "files": [
+     "all.json.gz"
+    ],
+    "bars": 6601
+   }
+  },
+  "ES_F": {
+   "1m": {
+    "files": [
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 28582
+   },
+   "5m": {
+    "files": [
+     "2026-09.json.gz",
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 11470
+   },
+   "15m": {
+    "files": [
+     "2026-09.json.gz",
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 3847
+   },
+   "30m": {
+    "files": [
+     "2026-09.json.gz",
+     "2026-10.json.gz",
+     "2026-11.json.gz"
+    ],
+    "bars": 1927
+   },
+   "60m": {
+    "files": [
+     "2024.json.gz",
+     "2025.json.gz",
+     "2026.json.gz"
+    ],
+    "bars": 11414
+   },
+   "1d": {
+    "files": [
+     "all.json.gz"
+    ],
+    "bars": 6601
+   }
+  }
+ }
+}

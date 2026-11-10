@@ -56,7 +56,34 @@ export function validRequest(symbol, interval) {
   return /^[A-Za-z0-9=!:._^-]{1,32}$/.test(String(symbol)) && Object.hasOwn(LIMITS, String(interval));
 }
 
+// Micro contracts trade at the same price as their full-size contract, which has a
+// longer history (MNQ started in 2019, NQ data goes back to 2000).
+const MICRO_TO_FULL = { MNQ: 'NQ', MES: 'ES', MYM: 'YM', M2K: 'RTY', MGC: 'GC', MCL: 'CL', SIL: 'SI', M6E: '6E' };
+
 export async function history(symbol, interval) {
+  const data = await historyOne(symbol, interval);
+  const micro = /^([A-Z0-9]+)=F$/.exec(data.yahooSymbol);
+  const full = micro && MICRO_TO_FULL[micro[1]];
+  if (!full || interval !== '1d') return data;
+  // daily bars: extend the micro's history backwards with the full-size contract
+  try {
+    const older = await historyOne(`${full}1!`, interval);
+    const cut = data.time[0];
+    const n = older.time.findIndex((t) => t >= cut);
+    const k = n < 0 ? older.time.length : n;
+    if (k === 0) return data;
+    const out = { ...data, stitched: { symbol: older.yahooSymbol, until: cut, bars: k } };
+    for (const f of ['time', 'open', 'high', 'low', 'close', 'volume']) out[f] = [...older[f].slice(0, k), ...data[f]];
+    return out;
+  } catch {
+    return data;
+  }
+}
+
+// One symbol, as Yahoo serves it (no stitching).
+export async function rawHistory(symbol, interval) { return historyOne(symbol, interval); }
+
+async function historyOne(symbol, interval) {
   const lim = LIMITS[interval];
   if (!lim) throw new Error(`unsupported interval ${interval}`);
   const sym = yahooSymbol(symbol);

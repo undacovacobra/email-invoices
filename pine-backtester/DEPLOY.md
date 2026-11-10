@@ -35,12 +35,31 @@ the repository's default branch, so do one of these:
 Addresses for other branches ("preview deployments") ask you to log in to Vercel by
 default. Your main address doesn't.
 
+## Keep the 1-minute history growing (one-time, 1 minute)
+
+The site ships with a saved archive of MNQ, NQ, MES and ES bars (`data/`), and a GitHub
+Action adds the newest bars every Friday after the close. Yahoo only keeps 30 days of
+1-minute bars, so this is what lets the 1-minute history keep growing. GitHub only runs
+scheduled Actions from a repository's **default branch**, so make the app's branch the
+default:
+
+1. On GitHub open the **email-invoices** repository → **Settings** → **General**.
+2. Under **Default branch** click the ⇄ (switch) button, choose
+   **`claude/hopeful-cerf-7ldpix`**, then **Update** and confirm.
+3. Open the **Actions** tab → **Update market data archive** → **Run workflow** once to
+   check it works (it takes about a minute and commits any new bars).
+
+Each update commits the new bars and Vercel redeploys the site by itself. Your browser
+also keeps its own copy of every download, so history grows on your computer even
+before this is set up.
+
 ## Good to know
 
-* **Price data** comes from Yahoo Finance's free public feed, fetched by the site's small
-  server function (`api/history.js`). How far back it goes is set by Yahoo: about 30
-  days of 1-minute bars, 60 days of 5–30 minute bars, 2 years of 1-hour bars and decades
-  of daily bars. Downloads are cached for a minute.
+* **Price data**: futures and stocks come from Yahoo Finance's free feed through the
+  site's function (`api/history.js`), merged with the saved archive and your browser's
+  copy. Micro contracts' daily history is extended with the full-size contract (same
+  price), so MNQ daily goes back to 2000. Crypto comes straight from Binance (up to
+  100,000 bars per timeframe, all of it for 1h and above).
 * Yahoo sometimes rate-limits requests coming from cloud providers. If "Market data"
   shows an error, wait a minute and press **Load** again. CSV files and the sample data
   always work.

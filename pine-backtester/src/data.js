@@ -156,6 +156,56 @@ export async function fetchBinance(symbol, interval, bars = 3000) {
   return fromRows(rows);
 }
 
+// Crypto pairs straight from Binance's public market-data API (works from the
+// browser, no key). Fetches backwards in parallel batches until the pair's first
+// bar or `maxBars`, whichever comes first.
+const BINANCE_MS = { '1m': 60e3, '3m': 180e3, '5m': 300e3, '15m': 900e3, '30m': 1800e3, '1h': 3600e3, '2h': 7200e3, '4h': 14400e3, '1d': 86400e3 };
+export async function fetchBinanceAll(pair, interval, maxBars = 100000, onProgress) {
+  const step = BINANCE_MS[interval];
+  if (!step) throw new Error(`unsupported interval ${interval}`);
+  const win = 1000 * step;
+  const rows = [];
+  let end = Date.now();
+  for (let guard = 0; guard < 200 && rows.length < maxBars; guard++) {
+    const batch = [];
+    for (let k = 0; k < 8; k++) {
+      const e = end - k * win;
+      const url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(pair)}&interval=${interval}&startTime=${e - win + 1}&endTime=${e}&limit=1000`;
+      batch.push(fetch(url).then(async (r) => {
+        if (!r.ok) throw new Error(`exchange returned ${r.status}: ${(await r.text()).slice(0, 120)}`);
+        return r.json();
+      }));
+    }
+    const parts = await Promise.all(batch);
+    let reachedStart = false;
+    for (const k of parts) {
+      if (!k.length) { reachedStart = true; continue; }
+      for (const x of k) rows.push([x[0], +x[1], +x[2], +x[3], +x[4], +x[5]]);
+    }
+    end -= 8 * win;
+    if (onProgress) onProgress(rows.length);
+    if (reachedStart) break;
+  }
+  if (!rows.length) throw new Error(`no ${interval} data for ${pair}`);
+  const d = fromRows(rows);
+  if (d.time.length > maxBars) for (const f of Object.keys(d)) d[f] = d[f].slice(-maxBars);
+  return d;
+}
+
+// Merge two bar sets; `b` wins where both have the same timestamp.
+export function mergeBars(a, b, maxBars = 600000) {
+  if (!a || !a.time.length) return b;
+  const m = new Map();
+  const add = (d) => d.time.forEach((t, i) => m.set(t, [t, d.open[i], d.high[i], d.low[i], d.close[i], d.volume[i]]));
+  add(a);
+  add(b);
+  const rows = [...m.values()].sort((x, y) => x[0] - y[0]).slice(-maxBars);
+  return {
+    time: rows.map((r) => r[0]), open: rows.map((r) => r[1]), high: rows.map((r) => r[2]),
+    low: rows.map((r) => r[3]), close: rows.map((r) => r[4]), volume: rows.map((r) => r[5]),
+  };
+}
+
 // Futures contract specs: currency per 1.0 point per contract, and tick size.
 // Matched against the symbol or file name (e.g. "CME_MINI_MNQ1!, 1.csv").
 const CONTRACTS = [
