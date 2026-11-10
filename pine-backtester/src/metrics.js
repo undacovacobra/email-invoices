@@ -43,17 +43,19 @@ function ratios(equity, time, initial) {
   const months = [];
   let lastKey = null;
   let start = initial;
+  let prev = -1; // last bar with an equity value (bars outside the date range have none)
   for (let i = 0; i < equity.length; i++) {
     if (equity[i] === undefined) continue;
     const d = new Date(time[i]);
     const key = d.getUTCFullYear() * 12 + d.getUTCMonth();
     if (lastKey !== null && key !== lastKey) {
-      months.push((equity[i - 1] - start) / start);
-      start = equity[i - 1];
+      months.push((equity[prev] - start) / start);
+      start = equity[prev];
     }
     lastKey = key;
+    prev = i;
   }
-  if (equity.length) months.push((equity[equity.length - 1] - start) / start);
+  if (prev >= 0) months.push((equity[prev] - start) / start);
   if (months.length < 2) return { sharpe: NaN, sortino: NaN };
   const rf = 0.02 / 12;
   const mean = months.reduce((a, b) => a + b, 0) / months.length;
@@ -69,13 +71,16 @@ export function computeMetrics(broker, data) {
   const trades = broker.closed;
   const initial = broker.cfg.initial_capital;
   const n = data.close.length;
-  const lastClose = data.close[n - 1];
+  // only the bars inside the backtest date range count
+  const first = broker.firstBar ?? 0;
+  const lastBar = broker.lastBar ?? n - 1;
+  const lastClose = data.close[lastBar];
   const all = group(trades);
   const long = group(trades.filter((t) => t.dir > 0));
   const short = group(trades.filter((t) => t.dir < 0));
   const openPL = broker.openProfit(lastClose);
   const { sharpe, sortino } = ratios(broker.equity, data.time, initial);
-  const firstPrice = data.open[0];
+  const firstPrice = data.open[first];
   return {
     initialCapital: initial,
     all, long, short,
@@ -91,6 +96,8 @@ export function computeMetrics(broker, data) {
     maxContracts: broker.maxContracts,
     commissionPaid: broker.commissionPaid,
     openTrades: broker.open.length,
-    finalEquity: broker.equity[n - 1],
+    finalEquity: broker.equity[lastBar] ?? initial,
+    firstBar: first,
+    lastBar,
   };
 }

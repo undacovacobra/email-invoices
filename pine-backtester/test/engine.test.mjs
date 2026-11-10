@@ -439,3 +439,30 @@ test('futures higher-timeframe bars start at the 18:00 New York session open', a
   assert.equal(v[24 * 60 - 1], 0); // 17:59 next day still in the first session
   assert.equal(v[24 * 60], 1); // 18:00 starts the next trading day
 });
+
+test('date range: orders only inside the range, indicators warmed up before it', () => {
+  const closes = randomCloses(60);
+  const d = series(closes);
+  const src = `strategy("t")
+ma = ta.sma(close, 20)
+if bar_index % 4 == 0
+    strategy.entry("L", strategy.long)
+if bar_index % 4 == 2
+    strategy.close("L")
+plot(ma, "ma")
+`;
+  const all = runScript(src, d);
+  const from = d.time[30], to = d.time[45];
+  const part = runScript(src, d, { range: { from, to } });
+  // the moving average is identical: the script ran on every bar
+  assert.deepEqual(plot(part, 'ma'), plot(all, 'ma'));
+  for (const t of part.strategy.trades) {
+    assert.ok(t.entryTime >= from && t.exitTime <= to, `trade outside range: ${t.entryBar}-${t.exitBar}`);
+  }
+  assert.ok(part.strategy.trades.length > 0 && part.strategy.trades.length < all.strategy.trades.length);
+  assert.equal(part.strategy.metrics.firstBar, 30);
+  assert.equal(part.strategy.metrics.lastBar, 45);
+  // buy & hold is measured over the range only
+  close(part.strategy.metrics.buyHoldReturnPct, ((d.close[45] - d.open[30]) / d.open[30]) * 100);
+  assert.ok(part.strategy.equity.slice(0, 30).every((v) => v === undefined));
+});

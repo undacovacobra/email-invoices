@@ -29,8 +29,14 @@ const DEFAULTS = {
 let tradeSeq = 0;
 
 export class Broker {
-  constructor(data, mintick, overrides = {}, pointvalue = 1) {
+  constructor(data, mintick, overrides = {}, pointvalue = 1, range = null) {
     this.data = data;
+    // Backtest date range (ms). The script still runs on every bar so indicators are
+    // warmed up, but orders are only accepted and filled inside the range.
+    this.rangeFrom = range && Number.isFinite(range.from) ? range.from : -Infinity;
+    this.rangeTo = range && Number.isFinite(range.to) ? range.to : Infinity;
+    this.firstBar = null; // first / last bar inside the range
+    this.lastBar = null;
     this.mintick = mintick;
     this.pv = pointvalue; // currency per 1.0 of price per contract (e.g. MNQ = 2)
     this.overrides = overrides;
@@ -111,10 +117,16 @@ export class Broker {
     this.orders.push(order);
   }
 
-  entry(o) { this.placeOrder('entry', o); }
-  order(o) { this.placeOrder('order', o); }
+  inRange(bar) {
+    const t = this.data.time[bar];
+    return t >= this.rangeFrom && t <= this.rangeTo;
+  }
+
+  entry(o) { if (this.inRange(this.bar)) this.placeOrder('entry', o); }
+  order(o) { if (this.inRange(this.bar)) this.placeOrder('order', o); }
 
   close(o) {
+    if (!this.inRange(this.bar)) return;
     const id = String(o.id);
     if (!this.open.some((t) => t.entryId === id)) return;
     this.orders = this.orders.filter((x) => !(x.kind === 'close' && x.id === id));
@@ -125,12 +137,13 @@ export class Broker {
   }
 
   closeAll(o) {
-    if (!this.open.length) return;
+    if (!this.open.length || !this.inRange(this.bar)) return;
     this.orders = this.orders.filter((x) => x.kind !== 'closeAll');
     this.orders.push({ kind: 'closeAll', id: 'Close all', comment: o.comment, createdBar: this.bar, seq: this.seq++, immediately: !!o.immediately });
   }
 
   exit(o) {
+    if (!this.inRange(this.bar)) return;
     const fromEntry = o.fromEntry ? String(o.fromEntry) : '';
     const key = `${o.id}|${fromEntry}`;
     const rule = {
@@ -394,6 +407,7 @@ export class Broker {
   // Called before the script runs on `bar`.
   processBar(bar) {
     this.bar = bar;
+    if (!this.inRange(bar)) return;
     const path = this.pathFor(bar);
     // 1) market orders at the open
     const market = this.orders
@@ -424,6 +438,7 @@ export class Broker {
 
   // Called after the script ran on `bar`.
   processOnClose(bar) {
+    if (!this.inRange(bar)) return;
     const price = this.data.close[bar];
     const market = this.orders
       .filter((o) => o.createdBar === bar && (this.cfg.process_orders_on_close || o.immediately) &&
@@ -454,6 +469,9 @@ export class Broker {
 
   // Equity bookkeeping at the end of the bar.
   endBar(bar) {
+    if (!this.inRange(bar)) return;
+    if (this.firstBar === null) this.firstBar = bar;
+    this.lastBar = bar;
     this.trackExcursions(bar);
     const path = this.pathFor(bar);
     for (const p of path.slice(1)) {

@@ -104,7 +104,7 @@ function utcParts(ms) {
     mi: d.getUTCMinutes(), s: d.getUTCSeconds(), wd: d.getUTCDay() + 1,
   };
 }
-function zonedToUtc(y, mo, d, h, mi, s, tz) {
+export function zonedToUtc(y, mo, d, h, mi, s, tz) {
   const guess = Date.UTC(y, mo - 1, d, h, mi, s);
   const p = timeParts(guess, tz);
   const asUtc = Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi, p.s);
@@ -285,8 +285,9 @@ export class Runtime {
     };
     if (this.broker) {
       const br = this.broker;
-      const last = this.data.close[this.n - 1];
+      const last = this.data.close[br.lastBar ?? this.n - 1];
       out.strategy = {
+        range: { firstBar: br.firstBar, lastBar: br.lastBar },
         config: br.cfg,
         declared: br.declared || br.cfg,
         trades: br.closed,
@@ -1027,7 +1028,7 @@ function buildBuiltins(rt) {
         currency: a[14], slippage: a[15], commission_type: a[16], commission_value: a[17],
         process_orders_on_close: a[18], close_entries_rule: a[19],
       };
-      rt.broker = new Broker(rt.data, rt.mintick, rt.opts.properties || {}, rt.pointvalue);
+      rt.broker = new Broker(rt.data, rt.mintick, rt.opts.properties || {}, rt.pointvalue, rt.opts.range);
       rt.broker.configure(cfg);
       rt.broker.bar = 0;
     }

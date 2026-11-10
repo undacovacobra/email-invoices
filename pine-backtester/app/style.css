@@ -211,14 +211,18 @@ table.trades tbody tr:hover td { background: var(--panel-2); }
 .props dd { margin: 0; font-family: var(--font-mono); }
 
 /* ---------- settings modal ---------- */
+/* Settings dock on the right, over the editor, so the chart and the results stay
+   visible and update while you change values. */
 .modal-back {
-  position: fixed; inset: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 60%, transparent);
-  display: flex; align-items: center; justify-content: center;
+  position: fixed; inset: 0; z-index: 20; pointer-events: none;
+  display: flex; align-items: stretch; justify-content: flex-end;
+  padding-block: calc(56px + env(safe-area-inset-top, 0px)) calc(12px + env(safe-area-inset-bottom, 0px));
   padding-left: max(16px, env(safe-area-inset-left, 0px));
   padding-right: max(16px, env(safe-area-inset-right, 0px));
 }
 .modal {
-  width: min(520px, 100%); max-height: min(640px, calc(100% - 32px)); display: flex; flex-direction: column;
+  pointer-events: auto;
+  width: min(460px, 100%); max-height: 100%; display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
   box-shadow: 0 18px 50px rgb(0 0 0 / 0.28);
 }
@@ -233,6 +237,13 @@ table.trades tbody tr:hover td { background: var(--panel-2); }
 .row-field input[type="checkbox"] { justify-self: start; width: 18px; height: 18px; }
 .modal footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
 .hint { font-size: var(--fs-xs); color: var(--muted); }
+.live-note { margin-right: auto; align-self: center; font-size: var(--fs-xs); color: var(--muted); }
+.live-note.busy::before { content: "● "; color: var(--accent); }
+.range { display: flex; align-items: center; gap: 6px; margin-left: auto; padding-left: 12px; white-space: nowrap; }
+.range label { font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.range .field { height: 26px; padding: 0 6px; font-size: var(--fs-xs); }
+.range .btn { height: 26px; font-size: var(--fs-xs); padding: 0 8px; }
+.tabs .range + .tester-title { margin-left: 12px; }
 
 /* ---------- narrow screens ---------- */
 @media (max-width: 900px) {

@@ -90,6 +90,13 @@ The broker emulator follows the rules TradingView documents for its Strategy Tes
 | Order size | `strategy.fixed` / `strategy.cash` / `strategy.percent_of_equity`, sized from the signal bar's close |
 | Costs | commission (percent, per contract, per order) and slippage in ticks |
 
+**Settings** dock on the right and the backtest re-runs as you change any input or
+property; there's no Apply step. **From / To** on the Strategy Tester bar limits the
+backtest to those dates (whole days in the chosen time zone). The script still runs on
+the earlier bars, so indicators are warmed up when the range starts; orders are only
+placed and filled inside the range, and every statistic, the equity curve and buy & hold
+cover the range only. CLI: `--from 2026-10-01 --to 2026-10-31`.
+
 **Overview chart**: equity trade by trade (or bar by bar), drawdown hanging from the
 top, optional per-trade run-up / drawdown bars and buy & hold, in currency or percent;
 hover for each trade's numbers.

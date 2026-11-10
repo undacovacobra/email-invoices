@@ -81,6 +81,13 @@
         <button role="tab" data-tab="performance" aria-selected="false">Performance Summary</button>
         <button role="tab" data-tab="trades" aria-selected="false">List of Trades</button>
         <button role="tab" data-tab="properties" aria-selected="false">Properties</button>
+        <div class="range" title="Backtest only this period. The script still calculates on the earlier bars, so indicators are warmed up.">
+          <label for="rangeFrom">From</label>
+          <input type="date" id="rangeFrom" class="field">
+          <label for="rangeTo">To</label>
+          <input type="date" id="rangeTo" class="field">
+          <button type="button" class="btn ghost" id="rangeAll">All data</button>
+        </div>
         <span id="testerTitle" class="tester-title"></span>
       </nav>
       <div id="tab-overview" class="tab-body">
@@ -124,8 +131,9 @@
       <div id="stab-inputs" class="modal-body"></div>
       <div id="stab-props" class="modal-body" hidden></div>
       <footer>
+        <span id="liveNote" class="live-note">Changes apply as you make them</span>
         <button class="btn" id="settingsReset">Reset to script defaults</button>
-        <button class="btn primary" id="settingsApply">Apply</button>
+        <button class="btn primary" id="settingsApply">Done</button>
       </footer>
     </div>
   </div>

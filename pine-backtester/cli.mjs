@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Command-line backtest:  node cli.mjs my_strategy.pine data.csv [--input "Fast length=10"] [--json]
 import { readFileSync } from 'node:fs';
-import { runScript } from './src/runtime.js';
+import { runScript, zonedToUtc } from './src/runtime.js';
 import { parseCSV, sampleData, guessContract, SESSIONS } from './src/data.js';
 
 const args = process.argv.slice(2);
@@ -14,6 +14,8 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--tz') flags.tz = args[++i];
   else if (a === '--pointvalue') flags.pointvalue = +args[++i];
   else if (a === '--mintick') flags.mintick = +args[++i];
+  else if (a === '--from') flags.from = args[++i];
+  else if (a === '--to') flags.to = args[++i];
   else if (a === '--input') {
     const [k, ...v] = args[++i].split('=');
     const val = v.join('=');
@@ -36,9 +38,16 @@ const mintick = flags.mintick ?? contract?.mintick;
 if (contract && (flags.pointvalue === undefined || flags.mintick === undefined)) {
   console.log(`contract: ${contract.root} (point value ${pointvalue}, tick ${mintick}) — override with --pointvalue / --mintick`);
 }
+// --from / --to YYYY-MM-DD, in the --tz time zone (whole days)
+const day = (s, end) => {
+  if (!s) return undefined;
+  const [y, m, d] = s.split('-').map(Number);
+  return zonedToUtc(y, m, d, 0, 0, 0, flags.tz) + (end ? 86400000 - 1 : 0);
+};
+const range = flags.from || flags.to ? { from: day(flags.from, false), to: day(flags.to, true) } : undefined;
 let res;
 try {
-  res = runScript(source, data, { inputs: flags.inputs, timezone: flags.tz, pointvalue, mintick, session: contract ? SESSIONS.futures : undefined });
+  res = runScript(source, data, { inputs: flags.inputs, timezone: flags.tz, pointvalue, mintick, range, session: contract ? SESSIONS.futures : undefined });
 } catch (e) {
   console.error(String(e.message || e));
   process.exit(1);

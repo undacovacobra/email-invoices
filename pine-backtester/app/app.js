@@ -1,5 +1,5 @@
 // Browser UI: data loading, Pine editor, chart rendering and the strategy tester.
-import { runScript, SOURCES, timeParts } from '../src/runtime.js';
+import { runScript, SOURCES, timeParts, zonedToUtc } from '../src/runtime.js';
 import { parseCSV, sampleData, fetchBinance, guessContract, TIMEFRAMES, barSeconds, resample, SESSIONS } from '../src/data.js';
 import { EXAMPLES } from '../src/examples.js';
 
@@ -30,6 +30,8 @@ const state = {
   tfSel: store.get('tf', 'native'),
   session: SESSIONS.crypto, // where higher-timeframe bars start (see SESSIONS)
   server: false, // local server with the market-data endpoint is running
+  range: store.get('range', { from: '', to: '' }), // backtest dates, YYYY-MM-DD in the chosen time zone
+  rangeChanged: false,
 };
 
 // ------------------------------------------------------------ formatting
@@ -232,9 +234,44 @@ $('timeframe').addEventListener('change', () => {
   run();
 });
 fillTimeframeOptions();
+// ---- backtest date range (whole days in the chosen time zone)
+const ymd = (ms) => { const p = timeParts(ms, state.tz); return `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
+function rangeMs() {
+  const day = (s, end) => {
+    if (!s) return undefined;
+    const [y, m, d] = s.split('-').map(Number);
+    return zonedToUtc(y, m, d, 0, 0, 0, state.tz) + (end ? 86400000 - 1 : 0);
+  };
+  const r = { from: day(state.range.from, false), to: day(state.range.to, true) };
+  return r.from === undefined && r.to === undefined ? undefined : r;
+}
+function syncRangeInputs() {
+  const d = state.data;
+  if (d) {
+    const lo = ymd(d.time[0]), hi = ymd(d.time[d.time.length - 1]);
+    for (const id of ['rangeFrom', 'rangeTo']) { $(id).min = lo; $(id).max = hi; }
+  }
+  $('rangeFrom').value = state.range.from || '';
+  $('rangeTo').value = state.range.to || '';
+  $('rangeAll').disabled = !state.range.from && !state.range.to;
+}
+function setRange(from, to) {
+  if (from && to && from > to) [from, to] = [to, from];
+  state.range = { from: from || '', to: to || '' };
+  store.set('range', state.range);
+  state.rangeChanged = true;
+  syncRangeInputs();
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(run, 250);
+}
+$('rangeFrom').addEventListener('change', () => setRange($('rangeFrom').value, $('rangeTo').value));
+$('rangeTo').addEventListener('change', () => setRange($('rangeFrom').value, $('rangeTo').value));
+$('rangeAll').addEventListener('click', () => setRange('', ''));
+
 function showDataInfo() {
   const d = state.data;
   if (!d) return;
+  syncRangeInputs();
   const spec = state.spec.root ? ` · ${state.spec.root} $${state.spec.pointvalue}/pt, tick ${state.spec.mintick}` : '';
   $('dataInfo').textContent = `${state.dataLabel} · ${d.time.length.toLocaleString()} bars · ${fmtTime(d.time[0])} → ${fmtTime(d.time[d.time.length - 1])}${spec}`;
 }
@@ -339,9 +376,11 @@ function runOptions() {
     mintick: state.spec.mintick || undefined,
     timezone: state.tz,
     session: state.session,
+    range: rangeMs(),
   };
 }
 function showError(message, line) {
+  if ($('liveNote')) { $('liveNote').textContent = 'The last change made the script stop — see the editor status'; $('liveNote').classList.remove('busy'); }
   const ln = line || (/line (\d+)/.exec(message) || [])[1];
   refreshEditor(ln ? +ln : undefined);
   setStatus(message, true);
@@ -387,10 +426,14 @@ function run() {
 }
 function finishRun(res) {
   refreshEditor();
+  if ($('liveNote')) { $('liveNote').textContent = 'Changes apply as you make them'; $('liveNote').classList.remove('busy'); }
   state.result = res;
   const s = res.strategy;
   const secs = (res.elapsedMs / 1000).toFixed(res.elapsedMs < 10000 ? 2 : 1);
   setStatus(`${res.title} · ran ${state.data.time.length.toLocaleString()} bars in ${secs} s${s ? ` · ${s.trades.length} closed trade${s.trades.length === 1 ? '' : 's'}${s.openTrades.length ? `, ${s.openTrades.length} open` : ''}` : ''}`, false, true);
+  if (s && s.range.firstBar === null && (state.range.from || state.range.to)) {
+    setStatus(`No bars fall inside the date range ${state.range.from || '…'} → ${state.range.to || '…'}. The data covers ${ymd(state.data.time[0])} → ${ymd(state.data.time[state.data.time.length - 1])}.`, true);
+  }
   renderChart(res);
   renderTester(res);
 }
@@ -551,7 +594,11 @@ function renderChart(res) {
     if (panes[1]) panes[1].setHeight(Math.round($('chart').clientHeight * 0.3));
   } catch { /* older library */ }
 
-  if (prevRange) chart.timeScale().setVisibleLogicalRange(prevRange);
+  const rr = res.strategy && res.strategy.range;
+  if (state.rangeChanged && rr && rr.firstBar !== null) {
+    state.rangeChanged = false;
+    chart.timeScale().setVisibleLogicalRange({ from: rr.firstBar - 5, to: rr.lastBar + 5 });
+  } else if (prevRange) chart.timeScale().setVisibleLogicalRange(prevRange);
   else chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, times.length - 220), to: times.length + 5 });
 
   // legend
@@ -651,14 +698,16 @@ function equityPoints(res) {
   const s = res.strategy;
   const d = state.data;
   const init = s.metrics.initialCapital;
-  const p0 = d.open[0];
+  const first = s.metrics.firstBar ?? 0;
+  const lastBar = s.metrics.lastBar ?? d.time.length - 1;
+  const p0 = d.open[first];
   const pts = [];
   if (eqPrefs.axis === 'trades') {
-    pts.push({ label: 'Start', bar: 0, equity: init, trade: null });
+    pts.push({ label: 'Start', bar: first, equity: init, trade: null });
     for (const t of s.trades) pts.push({ label: `#${t.num}`, bar: t.exitBar, equity: init + t.cumProfit, trade: t });
   } else {
     let lastTrade = 0;
-    for (let i = 0; i < d.time.length; i++) {
+    for (let i = first; i <= lastBar; i++) {
       let trade = null;
       while (lastTrade < s.trades.length && s.trades[lastTrade].exitBar === i) trade = s.trades[lastTrade++];
       pts.push({ label: fmtTime(d.time[i]), bar: i, equity: s.equity[i], trade });
@@ -688,7 +737,7 @@ function renderEquity(res) {
   opts.handleScale = { mouseWheel: true, pinch: true, axisPressedMouseMove: true };
   // Trade axis: the chart library only knows time, so trade k sits at day k and its labels show the trade number.
   const DAY = 86400;
-  const xs = byTrade ? pts.map((_, k) => (k + 1) * DAY) : state.data.time.map(chartTime);
+  const xs = byTrade ? pts.map((_, k) => (k + 1) * DAY) : pts.map((p) => chartTime(state.data.time[p.bar]));
   if (byTrade) {
     opts.timeScale.tickMarkFormatter = (t) => String(Math.round(t / DAY) - 1);
     opts.localization = { timeFormatter: (t) => { const k = Math.round(t / DAY) - 1; return k === 0 ? 'Start' : `Trade #${k}`; } };
@@ -856,7 +905,10 @@ function renderProperties(cfg, res) {
     ['Symbol', `${state.symbol} (${state.dataLabel})`],
     ['Timeframe', res.timeframe],
     ['Bars', state.data.time.length.toLocaleString()],
-    ['Range', `${fmtTime(state.data.time[0])} → ${fmtTime(state.data.time[state.data.time.length - 1])}`],
+    ['Data', `${fmtTime(state.data.time[0])} → ${fmtTime(state.data.time[state.data.time.length - 1])}`],
+    ['Backtest period', res.strategy && res.strategy.metrics.firstBar !== undefined && (state.range.from || state.range.to)
+      ? `${fmtTime(state.data.time[res.strategy.metrics.firstBar])} → ${fmtTime(state.data.time[res.strategy.metrics.lastBar])}`
+      : 'All data'],
     ['Tick size (syminfo.mintick)', String(res.mintick)],
     ['Point value (syminfo.pointvalue)', String(res.pointvalue ?? 1)],
     ['Time zone', state.tz],
@@ -924,58 +976,82 @@ function openSettings() {
       <p class="hint">These override the values in the script's <code>strategy()</code> call, like the Properties tab of a strategy's settings.</p>`;
   }
   $('settingsTitle').textContent = res ? `${res.title} settings` : 'Settings';
+  // dock below the toolbar (it wraps to two lines on narrower windows)
+  const top = document.querySelector('.workspace').getBoundingClientRect().top;
+  $('settingsModal').style.paddingTop = `${Math.max(12, Math.round(top))}px`;
   $('settingsModal').hidden = false;
 }
 function closeSettings() { $('settingsModal').hidden = true; }
-function applySettings() {
+
+// Read every control in the settings panel into the overrides. Values that are
+// half-typed (empty / not a number) are skipped until they make sense.
+function readSettings() {
   const res = state.result;
-  if (res) {
-    res.inputs.forEach((inp, idx) => {
-      const el = $(`in_${idx}`);
-      if (!el) return;
-      let v;
-      if (inp.type === 'bool') v = el.checked;
-      else if (inp.type === 'int') v = Math.round(+el.value);
-      else if (inp.type === 'float' || inp.type === 'price') v = +el.value;
-      else if (inp.type === 'time') v = Date.parse(`${el.value}:00Z`);
-      else v = el.value;
-      if (v === inp.defval) delete state.inputOverrides[inp.key];
-      else state.inputOverrides[inp.key] = v;
-    });
-    if (res.strategy && $('pr_cap')) {
-      const next = {
-        initial_capital: +$('pr_cap').value, default_qty_value: +$('pr_qty').value, default_qty_type: $('pr_qtyt').value,
-        pyramiding: Math.round(+$('pr_pyr').value), commission_value: +$('pr_comm').value, commission_type: $('pr_commt').value,
-        slippage: Math.round(+$('pr_slip').value), process_orders_on_close: $('pr_poc').checked,
-      };
-      const pv = +$('pr_pv').value;
-      const tick = +$('pr_tick').value;
-      if (pv > 0) state.spec.pointvalue = pv;
-      if (tick > 0 && tick !== state.result.mintick) state.spec.mintick = tick;
-      showDataInfo();
-      // keep only values that differ from what the script itself declares
-      const declared = res.strategy.declared;
-      state.propOverrides = {};
-      for (const [k, v] of Object.entries(next)) if (v !== declared[k] && !(Number.isNaN(v))) state.propOverrides[k] = v;
+  if (!res) return;
+  res.inputs.forEach((inp, idx) => {
+    const el = $(`in_${idx}`);
+    if (!el) return;
+    let v;
+    if (inp.type === 'bool') v = el.checked;
+    else if (inp.type === 'int') v = Math.round(+el.value);
+    else if (inp.type === 'float' || inp.type === 'price') v = +el.value;
+    else if (inp.type === 'time') v = Date.parse(`${el.value}:00Z`);
+    else v = el.value;
+    if (typeof v === 'number' && (el.value === '' || Number.isNaN(v))) return;
+    if (inp.options && typeof inp.defval === 'number') v = +v;
+    if (v === inp.defval) delete state.inputOverrides[inp.key];
+    else state.inputOverrides[inp.key] = v;
+  });
+  if (res.strategy && $('pr_cap')) {
+    const num = (id, round) => { const el = $(id); if (el.value === '' || Number.isNaN(+el.value)) return undefined; return round ? Math.round(+el.value) : +el.value; };
+    const next = {
+      initial_capital: num('pr_cap'), default_qty_value: num('pr_qty'), default_qty_type: $('pr_qtyt').value,
+      pyramiding: num('pr_pyr', true), commission_value: num('pr_comm'), commission_type: $('pr_commt').value,
+      slippage: num('pr_slip', true), process_orders_on_close: $('pr_poc').checked,
+    };
+    const pv = num('pr_pv');
+    const tick = num('pr_tick');
+    if (pv > 0) state.spec.pointvalue = pv;
+    if (tick > 0 && tick !== res.mintick) state.spec.mintick = tick;
+    showDataInfo();
+    // keep only values that differ from what the script itself declares
+    const declared = res.strategy.declared;
+    const keep = {};
+    for (const [k, v] of Object.entries(next)) {
+      if (v === undefined) { if (k in state.propOverrides) keep[k] = state.propOverrides[k]; continue; }
+      if (v !== declared[k]) keep[k] = v;
     }
+    state.propOverrides = keep;
   }
   store.set('inputs', state.inputOverrides);
   store.set('props', state.propOverrides);
-  closeSettings();
-  run();
 }
-$('settingsBtn').addEventListener('click', openSettings);
+
+// Live updates: re-run shortly after the last change. A run still in progress is
+// cancelled by the next one, so the results always match the latest settings.
+let liveTimer = null;
+function liveUpdate(delay = 350) {
+  readSettings();
+  $('liveNote').textContent = 'Updating…';
+  $('liveNote').classList.add('busy');
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(run, delay);
+}
+for (const id of ['stab-inputs', 'stab-props']) {
+  $(id).addEventListener('input', (e) => { if (e.target.matches('input[type="number"], input[type="text"]')) liveUpdate(500); });
+  $(id).addEventListener('change', () => liveUpdate(150));
+}
+$('settingsBtn').addEventListener('click', () => ($('settingsModal').hidden ? openSettings() : closeSettings()));
 $('settingsClose').addEventListener('click', closeSettings);
-$('settingsApply').addEventListener('click', applySettings);
+$('settingsApply').addEventListener('click', () => { readSettings(); closeSettings(); });
 $('settingsReset').addEventListener('click', () => {
   state.inputOverrides = {};
   state.propOverrides = {};
   store.set('inputs', {});
   store.set('props', {});
-  closeSettings();
-  run();
+  openSettings(); // show the defaults again
+  liveUpdate(0);
 });
-$('settingsModal').addEventListener('click', (e) => { if (e.target === $('settingsModal')) closeSettings(); });
 document.querySelectorAll('.modal .tabs button').forEach((b) => b.addEventListener('click', () => {
   document.querySelectorAll('.modal .tabs button').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
   $('stab-inputs').hidden = b.dataset.stab !== 'inputs';
