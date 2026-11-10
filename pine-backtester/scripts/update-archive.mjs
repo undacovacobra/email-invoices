@@ -39,10 +39,11 @@ async function readChunk(path) {
   }
 }
 
-function merge(old, add) {
+function merge(old, add, frozenUntil = -Infinity) {
   const m = new Map();
   if (old) old.t.forEach((t, i) => m.set(t, [t, old.o[i], old.h[i], old.l[i], old.c[i], old.v[i]]));
-  add.forEach((r) => m.set(r[0], r));
+  // bars up to frozenUntil came from a better source (e.g. exchange data) and are kept
+  add.forEach((r) => { if (r[0] > frozenUntil) m.set(r[0], r); });
   const rows = [...m.values()].sort((a, b) => a[0] - b[0]);
   return { t: rows.map((r) => r[0]), o: rows.map((r) => r[1]), h: rows.map((r) => r[2]), l: rows.map((r) => r[3]), c: rows.map((r) => r[4]), v: rows.map((r) => r[5]) };
 }
@@ -73,19 +74,26 @@ async function main() {
         byChunk.get(c).push([Math.round(live.time[i] / 1000), live.open[i], live.high[i], live.low[i], live.close[i], live.volume[i]]);
       }
       let added = 0;
+      const prev = (index.symbols[key] || {})[interval] || {};
       for (const [c, rows] of byChunk) {
         const path = join(dir, `${c}.json.gz`);
         const old = await readChunk(path);
-        const merged = merge(old, rows);
+        const merged = merge(old, rows, prev.frozenUntil ?? -Infinity);
         added += merged.t.length - (old ? old.t.length : 0);
         const body = gzipSync(JSON.stringify(merged), { level: 9 });
         await writeFile(path, body);
       }
       const files = (await readdir(dir)).filter((f) => f.endsWith('.json.gz')).sort();
       let bars = 0;
-      for (const f of files) bars += ((await readChunk(join(dir, f))) || { t: [] }).t.length;
+      let from = Infinity;
+      let to = -Infinity;
+      for (const f of files) {
+        const d = (await readChunk(join(dir, f))) || { t: [] };
+        bars += d.t.length;
+        if (d.t.length) { from = Math.min(from, d.t[0]); to = Math.max(to, d.t[d.t.length - 1]); }
+      }
       index.symbols[key] = index.symbols[key] || {};
-      index.symbols[key][interval] = { files, bars };
+      index.symbols[key][interval] = { ...prev, files, bars, from, to };
       console.log(`${live.yahooSymbol} ${interval}: +${added} new bars, ${bars} saved in ${files.length} file(s)`);
     }
   }

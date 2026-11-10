@@ -194,12 +194,14 @@ export async function fetchBinanceAll(pair, interval, maxBars = 100000, onProgre
 
 // Merge two bar sets; `b` wins where both have the same timestamp.
 export function mergeBars(a, b, maxBars = 600000) {
+  if (!b || !b.time.length) return a;
   if (!a || !a.time.length) return b;
   const m = new Map();
   const add = (d) => d.time.forEach((t, i) => m.set(t, [t, d.open[i], d.high[i], d.low[i], d.close[i], d.volume[i]]));
   add(a);
   add(b);
-  const rows = [...m.values()].sort((x, y) => x[0] - y[0]).slice(-maxBars);
+  const rows = [...m.values()].sort((x, y) => x[0] - y[0]);
+  if (rows.length > maxBars) rows.splice(0, rows.length - maxBars);
   return {
     time: rows.map((r) => r[0]), open: rows.map((r) => r[1]), high: rows.map((r) => r[2]),
     low: rows.map((r) => r[3]), close: rows.map((r) => r[4]), volume: rows.map((r) => r[5]),

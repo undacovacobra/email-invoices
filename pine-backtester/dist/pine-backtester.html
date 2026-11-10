@@ -3812,12 +3812,14 @@ async function fetchBinanceAll(pair, interval, maxBars = 100000, onProgress) {
 
 // Merge two bar sets; `b` wins where both have the same timestamp.
 function mergeBars(a, b, maxBars = 600000) {
+  if (!b || !b.time.length) return a;
   if (!a || !a.time.length) return b;
   const m = new Map();
   const add = (d) => d.time.forEach((t, i) => m.set(t, [t, d.open[i], d.high[i], d.low[i], d.close[i], d.volume[i]]));
   add(a);
   add(b);
-  const rows = [...m.values()].sort((x, y) => x[0] - y[0]).slice(-maxBars);
+  const rows = [...m.values()].sort((x, y) => x[0] - y[0]);
+  if (rows.length > maxBars) rows.splice(0, rows.length - maxBars);
   return {
     time: rows.map((r) => r[0]), open: rows.map((r) => r[1]), high: rows.map((r) => r[2]),
     low: rows.map((r) => r[3]), close: rows.map((r) => r[4]), volume: rows.map((r) => r[5]),
@@ -4348,7 +4350,8 @@ function rangeMs() {
 function syncRangeInputs() {
   const d = state.data;
   if (d) {
-    const lo = ymd(d.time[0]), hi = ymd(d.time[d.time.length - 1]);
+    const av = state.mode === 'market' && state.avail ? state.avail : { from: d.time[0], to: d.time[d.time.length - 1] };
+    const lo = ymd(av.from), hi = ymd(av.to);
     for (const id of ['rangeFrom', 'rangeTo']) { $(id).min = lo; $(id).max = hi; }
   }
   $('rangeFrom').value = state.range.from || '';
@@ -4362,7 +4365,8 @@ function setRange(from, to) {
   state.rangeChanged = true;
   syncRangeInputs();
   clearTimeout(liveTimer);
-  liveTimer = setTimeout(run, 250);
+  // market data: load the chosen period (the archive is fetched in pieces)
+  liveTimer = setTimeout(state.mode === 'market' ? loadSymbol : run, 250);
 }
 $('rangeFrom').addEventListener('change', () => setRange($('rangeFrom').value, $('rangeTo').value));
 $('rangeTo').addEventListener('change', () => setRange($('rangeFrom').value, $('rangeTo').value));
@@ -4373,7 +4377,12 @@ function showDataInfo() {
   if (!d) return;
   syncRangeInputs();
   const spec = state.spec.root ? ` · ${state.spec.root} $${state.spec.pointvalue}/pt, tick ${state.spec.mintick}` : '';
-  $('dataInfo').textContent = `${state.dataLabel} · ${d.time.length.toLocaleString()} bars · ${fmtTime(d.time[0])} → ${fmtTime(d.time[d.time.length - 1])}${spec}`;
+  const more = state.mode === 'market' && state.avail && state.avail.from < d.time[0] - 2 * 86400000
+    ? ` · back to ${ymd(state.avail.from)} via From/To` : '';
+  // short line in the toolbar; the full description (sources, contract) on hover
+  const label = state.dataLabel.replace(/ \([^)]*\)/, '').replace(/ · (saved archive|this browser|Yahoo|Binance)( \+ (saved archive|this browser|Yahoo|Binance))*/, '');
+  $('dataInfo').textContent = `${label} · ${d.time.length.toLocaleString()} bars · ${ymd(d.time[0])} → ${ymd(d.time[d.time.length - 1])}${more}`;
+  $('dataInfo').title = `${state.dataLabel}${spec}\n${fmtTime(d.time[0])} → ${fmtTime(d.time[d.time.length - 1])}`;
 }
 $('tz').value = state.tz;
 if ($('tz').value !== state.tz) { state.tz = 'UTC'; $('tz').value = 'UTC'; }
@@ -4459,11 +4468,26 @@ async function readGzJson(url) {
   }
   return JSON.parse(new TextDecoder().decode(buf));
 }
-async function loadArchive(ySym, interval) {
+async function archiveEntry(ySym, interval) {
   const idx = await getArchiveIndex();
-  const entry = idx && idx.symbols && idx.symbols[fileKey(ySym)] && idx.symbols[fileKey(ySym)][interval];
+  return (idx && idx.symbols && idx.symbols[fileKey(ySym)] && idx.symbols[fileKey(ySym)][interval]) || null;
+}
+// chunk files are named by month (YYYY-MM), year (YYYY) or 'all'
+function chunkSpan(name) {
+  let m = /^(\d{4})-(\d{2})$/.exec(name);
+  if (m) return [Date.UTC(+m[1], +m[2] - 1, 1), Date.UTC(+m[1], +m[2], 1)];
+  m = /^(\d{4})$/.exec(name);
+  if (m) return [Date.UTC(+m[1], 0, 1), Date.UTC(+m[1] + 1, 0, 1)];
+  return [-Infinity, Infinity];
+}
+async function loadArchive(ySym, interval, from = -Infinity, to = Infinity) {
+  const entry = await archiveEntry(ySym, interval);
   if (!entry) return null;
-  const parts = await Promise.all(entry.files.map((f) => readGzJson(`../data/${fileKey(ySym)}/${interval}/${f}`).catch(() => null)));
+  const wanted = entry.files.filter((f) => {
+    const [a, b] = chunkSpan(f.replace('.json.gz', ''));
+    return b > from && a <= to;
+  });
+  const parts = await Promise.all(wanted.map((f) => readGzJson(`../data/${fileKey(ySym)}/${interval}/${f}`).catch(() => null)));
   let out = null;
   for (const p of parts) {
     if (!p) continue;
@@ -4473,6 +4497,16 @@ async function loadArchive(ySym, interval) {
   return out;
 }
 const memCache = new Map(); // already-loaded symbol/timeframe combinations, for instant switching
+function sliceBars(d, from, to) {
+  let a = 0;
+  let b = d.time.length;
+  while (a < b && d.time[a] < from) a++;
+  while (b > a && d.time[b - 1] > to) b--;
+  if (a === 0 && b === d.time.length) return d;
+  const out = {};
+  for (const k of Object.keys(d)) out[k] = d[k].slice(a, b);
+  return out;
+}
 
 let marketReq = 0;
 async function loadSymbol() {
@@ -4484,14 +4518,27 @@ async function loadSymbol() {
   const id = ++marketReq;
   const pair = cryptoPair(sym);
   const iv = (pair ? CRYPTO_BASE : MARKET_BASE)[state.tfSel] || (pair ? '1m' : '1m');
-  const cacheKey = `${pair ? `binance:${pair}` : yahooSymbol(sym)}|${iv}`;
+  // How much to load: the From/To range when one is set (plus a warm-up), otherwise
+  // a recent window sized so backtests stay quick. The archive goes back much further.
+  const ivMs = { '1m': 60e3, '3m': 180e3, '5m': 300e3, '15m': 900e3, '30m': 1800e3, '60m': 3600e3, '1h': 3600e3, '2h': 7200e3, '4h': 14400e3, '1d': 86400e3 }[iv] || 60e3;
+  const DAY = 86400000;
+  const lookback = { '1m': 92, '3m': 182, '5m': 365, '15m': 3 * 365 }[iv] || Infinity;
+  const warmup = Math.max(10 * DAY, 500 * ivMs);
+  const rng = rangeMs();
+  const winTo = rng && rng.to !== undefined ? rng.to + DAY : Infinity;
+  const winFrom = rng && rng.from !== undefined ? rng.from - warmup
+    : (Number.isFinite(winTo) ? winTo : Date.now()) - lookback * DAY;
+  const winKey = `${Number.isFinite(winFrom) ? Math.floor(winFrom / DAY) : 'all'}-${Number.isFinite(winTo) ? Math.floor(winTo / DAY) : 'now'}`;
+  const cacheKey = `${pair ? `binance:${pair}` : yahooSymbol(sym)}|${iv}|${winKey}`;
   const hit = memCache.get(cacheKey);
   if (hit && Date.now() - hit.at < 5 * 60000) {
+    state.avail = hit.avail;
     setData(hit.d, hit.label, sym, sym, hit.kind);
     run();
     return;
   }
-  setStatus(`Loading ${sym} ${iv} history…`);
+  const estBars = Number.isFinite(winFrom) ? Math.round(((Math.min(winTo, Date.now()) - winFrom) / ivMs) * 0.95) : 0;
+  setStatus(`Loading ${sym} ${iv} history${estBars > 400000 ? ` (about ${estBars.toLocaleString()} bars; backtests on this much data can take a few minutes)` : ''}…`);
   let live = null;
   let liveErr = null;
   let kind;
@@ -4516,10 +4563,18 @@ async function loadSymbol() {
   if (id !== marketReq) return; // a newer request replaced this one
   kind = kind || (/=F$/.test(ySym) ? 'futures' : /-USD$/.test(ySym) ? 'crypto' : 'stocks');
   const idbKey = pair ? `binance:${pair}|${iv}` : `${ySym}|${iv}`;
-  const [archived, saved] = await Promise.all([pair ? null : loadArchive(ySym, iv), idb.get(idbKey)]);
+  const [archived, saved, entry] = await Promise.all([
+    pair ? null : loadArchive(ySym, iv, winFrom, winTo), idb.get(idbKey), pair ? null : archiveEntry(ySym, iv),
+  ]);
   if (id !== marketReq) return;
   let d = null;
-  for (const part of [archived, saved, live]) if (part && part.time.length) d = d ? mergeBars(d, part) : part;
+  for (const part of [archived, saved, live]) if (part && part.time.length) d = d ? mergeBars(d, part, Infinity) : part;
+  // what exists overall (for the date pickers), then keep only the window
+  state.avail = d && d.time.length ? {
+    from: Math.min(d.time[0], entry && entry.from ? entry.from * 1000 : Infinity),
+    to: Math.max(d.time[d.time.length - 1], entry && entry.to ? entry.to * 1000 : -Infinity),
+  } : null;
+  if (d && !pair) d = sliceBars(d, winFrom, winTo);
   if (!d) {
     const why = liveErr ? liveErr.message : 'no data source is reachable from this page';
     setStatus(`Could not load ${sym}: ${why}. Check the symbol (examples: MNQ1!, ES1!, AAPL, SPY, BTCUSD).`, true);
@@ -4529,7 +4584,7 @@ async function loadSymbol() {
   if (live) idb.put(idbKey, saved ? mergeBars(saved, live) : live);
   const sources = [archived && 'saved archive', saved && 'this browser', live && (pair ? 'Binance' : 'Yahoo')].filter(Boolean);
   const label = `${sym}${name ? ` (${name})` : ''} · ${iv} · ${sources.join(' + ')}${liveErr ? ' (live download failed)' : ''}`;
-  memCache.set(cacheKey, { d, label, kind, at: Date.now() });
+  memCache.set(cacheKey, { d, label, kind, at: Date.now(), avail: state.avail });
   setData(d, label, sym, sym, kind);
   run();
 }
