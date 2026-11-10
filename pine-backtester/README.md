@@ -16,6 +16,10 @@ candlestick chart uses TradingView's open-source
 
 No install needed. Any one of these:
 
+* **In the cloud, free** – put it on Vercel once (about 5 minutes, steps in
+  [DEPLOY.md](DEPLOY.md)) and use it from any browser, with market data, nothing running
+  on your computer.
+
 * **Double-click `dist/pine-backtester.html`.** Everything is in that one file (it loads
   the chart library and fonts from a CDN, so it needs internet the first time).
 * **Local server** (Node 18+), works fully offline:

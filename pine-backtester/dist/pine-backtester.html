@@ -4207,7 +4207,7 @@ async function loadMarket() {
   $('symbol').value = sym;
   store.set('marketSymbol', sym);
   if (!state.server) {
-    setStatus('Market data needs the local server: in a terminal, go to the pine-backtester folder and run  node serve.mjs  then open http://localhost:8080', true);
+    setStatus('Market data needs the app\'s server: open your cloud copy (see DEPLOY.md), or run  node serve.mjs  in the pine-backtester folder and open http://localhost:8080', true);
     return;
   }
   if (state.tfSel === 'native') { state.tfSel = '1'; store.set('tf', '1'); }
@@ -4984,7 +4984,7 @@ refreshEditor();
     state.server = r.ok && (await r.json()).ok === true;
   } catch { state.server = false; }
   const marketOpt = document.querySelector('#dataSource option[value="market"]');
-  if (marketOpt && !state.server) marketOpt.textContent = 'Market data (run node serve.mjs)';
+  if (marketOpt && !state.server) marketOpt.textContent = 'Market data (needs the cloud or local server)';
   const saved = store.get('source', state.server ? 'market' : 'sample');
   const want = saved === 'market' && !state.server ? 'sample' : saved;
   $('dataSource').value = [...$('dataSource').options].some((o) => o.value === want) ? want : 'sample';
